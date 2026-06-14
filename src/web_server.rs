@@ -6,6 +6,7 @@ use axum::{
 use std::sync::{Arc, Mutex};
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
+use std::time::Instant;
 
 use crate::api_type::{ApiResponse, MoveRequest, NewGameRequest, game_state_from_partie};
 use crate::board::{Color, Pieces};
@@ -14,7 +15,7 @@ use crate::notation::coord_to_square_index;
 use crate::partie::Partie;
 
 const INITIAL_FEN: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-const AI_DEPTH: u32 = 9;
+const AI_DEPTH: u32 = 7;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -160,9 +161,12 @@ async fn new_game(
 
 fn jouer_coup_ia(partie: &mut Partie) -> Result<(), &'static str> {
     let mut board = partie.board;
+    let start = Instant::now();
     let Some(mv) = meilleur_coup(&mut board, &partie.tables, AI_DEPTH) else {
         return Err("Aucun coup trouve pour l'IA");
     };
+    let duree = start.elapsed();
+    println!("Temps de calcul: {} ms", duree.as_millis());
 
     partie.jouer_coup(mv);
     Ok(())

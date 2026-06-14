@@ -1,622 +1,545 @@
-# Plan d'action jour par jour vers une IA d'echecs
+# Evolution propre de l'evaluation et de la recherche IA
 
-Objectif: transformer le moteur actuel en programme d'echecs capable de jouer une partie complete, puis ajouter une IA simple avec minimax et alpha-beta.
+## Objectif du document
 
-Important: ce document donne un plan et des bouts de code pour guider le travail. Les exemples ne sont pas forcement a copier exactement. Il faut les adapter aux noms et aux types du projet.
+Ce document explique comment faire evoluer ton IA d'echecs Rust progressivement.
 
-Regle de progression: a la fin de chaque journee, lancer au minimum:
+Tu as deja une base importante:
 
-```bash
-cargo check
-cargo test
-```
+* generation des coups legaux;
+* `make_move`;
+* detection d'echec;
+* evaluation materielle;
+* negamax;
+* alpha-beta;
+* choix du meilleur coup;
+* debut d'ordre des coups;
+* debut d'evaluation positionnelle.
 
-## Etat actuel
+L'objectif maintenant n'est pas de refaire ton moteur.
 
-Le moteur sait deja:
-
-- representer le plateau avec des bitboards;
-- charger une position FEN;
-- generer les coups pseudo-legaux;
-- filtrer les coups legaux;
-- verifier si un roi est en echec;
-- jouer les coups avec `make_move`;
-- gerer roque, promotion et prise en passant;
-- faire des tests `perft`.
-
-Ce qui manque avant une IA propre:
-
-- detection de mat;
-- detection de pat;
-- regle des 50 coups;
-- repetition trois fois de la meme position;
-- historique de partie;
-- evaluation;
-- recherche IA.
-
-## Jour 1: creer un etat de partie simple
-
-But: avoir un type qui dit si la partie continue, si c'est mat ou si c'est pat.
-
-Fichier conseille:
-
-- creer plus tard un fichier comme `src/game_state.rs` ou `src/partie.rs`.
-
-Idee de type:
+L'objectif est de passer progressivement de:
 
 ```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EtatPartie {
-    EnCours,
-    Mat,
-    Pat,
-}
+let score = evaluation_materielle(board);
 ```
 
-Idee de fonction:
+vers:
 
 ```rust
-pub fn etat_partie_simple(
-    board: &mut CBoard,
-    tables: &AttackTables,
-) -> EtatPartie {
-    let coups = generate_legal_move(board, tables);
-
-    if !coups.is_empty() {
-        return EtatPartie::EnCours;
-    }
-
-    if is_king_in_check(board, tables, board.side_to_move) {
-        EtatPartie::Mat
-    } else {
-        EtatPartie::Pat
-    }
-}
+let score = evaluation_blanc(board);
 ```
 
-Attention:
+Puis vers une IA capable de mieux eviter les erreurs tactiques simples.
 
-- `generate_legal_move` prend `&mut CBoard`;
-- il faudra peut-etre ajouter des `derive` sur certains types pour les tests;
-- ne pas melanger encore les nulles par repetition et 50 coups.
+---
 
-Objectif de fin de journee:
+# 1. Etat actuel de ton code
 
-- une position normale retourne `EnCours`;
-- une position de mat retourne `Mat`;
-- une position de pat retourne `Pat`.
-
-## Jour 2: ajouter des tests pour mat et pat
-
-But: verifier que l'etat de partie fonctionne.
-
-FEN de mat possible:
-
-```text
-7k/7Q/6K1/8/8/8/8/8 b - - 0 1
-```
-
-Idee de test:
+Ton evaluation principale est maintenant organisee comme ceci:
 
 ```rust
-#[test]
-fn test_position_mat() {
-    let tables = init_attack_tables();
-    let mut board = board_from_fen(
-        "7k/7Q/6K1/8/8/8/8/8 b - - 0 1"
-    ).unwrap();
-
-    assert_eq!(etat_partie_simple(&mut board, &tables), EtatPartie::Mat);
-}
-```
-
-FEN de pat possible:
-
-```text
-7k/5K2/6Q1/8/8/8/8/8 b - - 0 1
-```
-
-Idee de test:
-
-```rust
-#[test]
-fn test_position_pat() {
-    let tables = init_attack_tables();
-    let mut board = board_from_fen(
-        "7k/5K2/6Q1/8/8/8/8/8 b - - 0 1"
-    ).unwrap();
-
-    assert_eq!(etat_partie_simple(&mut board, &tables), EtatPartie::Pat);
-}
-```
-
-Test de position en cours:
-
-```rust
-#[test]
-fn test_position_initiale_en_cours() {
-    let tables = init_attack_tables();
-    let mut board = board_from_fen(
-        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
-    ).unwrap();
-
-    assert_eq!(etat_partie_simple(&mut board, &tables), EtatPartie::EnCours);
-}
-```
-
-Objectif de fin de journee:
-
-- les tests mat, pat et en cours passent;
-- les anciens tests `perft` passent encore.
-
-## Jour 3: mettre a jour le compteur des 50 coups
-
-But: utiliser correctement `halfmove_clock`.
-
-Regle:
-
-- si un pion bouge, le compteur revient a 0;
-- si une capture arrive, le compteur revient a 0;
-- sinon, le compteur augmente de 1.
-
-Exemple de logique a placer dans la fonction qui joue un coup:
-
-```rust
-let reset_halfmove =
-    matches!(mv.piece, Pieces::PionBlanc | Pieces::PionNoir)
-    || mv.captured.is_some()
-    || matches!(mv.flag, MoveFlag::EnPassant);
-
-if reset_halfmove {
-    board.halfmove_clock = 0;
-} else {
-    board.halfmove_clock += 1;
-}
-```
-
-Attention avec `fullmove_number`:
-
-- le numero de coup complet augmente apres un coup noir;
-- il faut donc connaitre la couleur qui vient de jouer avant d'inverser `side_to_move`.
-
-Exemple:
-
-```rust
-let couleur_avant_coup = board.side_to_move;
-
-// jouer le coup ici
-
-if matches!(couleur_avant_coup, Color::Noir) {
-    board.fullmove_number += 1;
-}
-```
-
-Objectif de fin de journee:
-
-- un coup calme augmente `halfmove_clock`;
-- un coup de pion remet `halfmove_clock` a 0;
-- une capture remet `halfmove_clock` a 0;
-- les tests `perft` passent encore.
-
-## Jour 4: ajouter la nulle par regle des 50 coups
-
-But: ajouter un nouvel etat de partie.
-
-Nouveau type:
-
-```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EtatPartie {
-    EnCours,
-    Mat,
-    Pat,
-    Nulle50Coups,
-}
-```
-
-Exemple dans la detection:
-
-```rust
-if board.halfmove_clock >= 100 {
-    return EtatPartie::Nulle50Coups;
-}
-```
-
-Ordre conseille dans `etat_partie`:
-
-1. verifier la regle des 50 coups;
-2. generer les coups legaux;
-3. detecter mat ou pat;
-4. sinon retourner `EnCours`.
-
-Idee de test:
-
-```rust
-#[test]
-fn test_nulle_50_coups() {
-    let tables = init_attack_tables();
-    let mut board = board_from_fen(
-        "7k/8/8/8/8/8/8/K7 w - - 100 80"
-    ).unwrap();
-
-    assert_eq!(etat_partie(&mut board, &tables), EtatPartie::Nulle50Coups);
-}
-```
-
-Objectif de fin de journee:
-
-- `halfmove_clock >= 100` donne une nulle;
-- mat et pat fonctionnent toujours;
-- les tests `perft` passent encore.
-
-## Jour 5: creer une structure de partie
-
-But: separer une position et une partie complete.
-
-`CBoard` represente une position. Une partie doit contenir aussi l'historique.
-
-Idee de structure:
-
-```rust
-pub struct Partie {
-    pub board: CBoard,
-    pub tables: AttackTables,
-    pub coups_joues: Vec<Move>,
-}
-```
-
-Idee de constructeur:
-
-```rust
-impl Partie {
-    pub fn depuis_fen(fen: &str) -> Result<Self, String> {
-        Ok(Self {
-            board: board_from_fen(fen)?,
-            tables: init_attack_tables(),
-            coups_joues: Vec::new(),
-        })
-    }
-}
-```
-
-Idee de methode pour jouer:
-
-```rust
-impl Partie {
-    pub fn jouer_coup(&mut self, mv: Move) {
-        make_move(&mut self.board, mv);
-        self.coups_joues.push(mv);
-    }
-}
-```
-
-Objectif de fin de journee:
-
-- une `Partie` peut etre creee depuis une FEN;
-- elle peut jouer un coup legal;
-- elle garde la liste des coups joues.
-
-## Jour 6: creer une cle de position pour les repetitions
-
-But: identifier une position sans tenir compte de `halfmove_clock` ni `fullmove_number`.
-
-Une repetition depend de:
-
-- pieces sur le plateau;
-- couleur au trait;
-
-- droits de roque;
-- case en passant possible.
-
-Elle ne depend pas de:
-
-- `halfmove_clock`;
-- `fullmove_number`.
-
-Idee de cle:
-
-```rust
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct ClePosition {
-    pub piece_bb: [u64; 14],
-    pub side_to_move: Color,
-    pub castling_rights: u8,
-    pub en_passant_square: Option<u8>,
-}
-```
-
-Idee de fonction:
-
-```rust
-pub fn cle_position(board: &CBoard) -> ClePosition {
-    ClePosition {
-        piece_bb: board.piece_bb,
-        side_to_move: board.side_to_move,
-        castling_rights: board.castling_rights,
-        en_passant_square: board.en_passant_square,
-    }
-}
-```
-
-Attention:
-
-- pour utiliser `Hash`, `PartialEq` et `Eq`, il faudra peut-etre ajouter des derives a `Color`;
-- plus tard, cette cle pourra etre remplacee par un hash Zobrist.
-
-Objectif de fin de journee:
-
-- deux positions identiques donnent la meme cle;
-- deux positions avec un trait different donnent deux cles differentes;
-- deux positions avec droits de roque differents donnent deux cles differentes.
-
-## Jour 7: detecter la repetition trois fois
-
-But: compter combien de fois chaque position est apparue.
-
-Ajouter dans `Partie`:
-
-```rust
-use std::collections::HashMap;
-
-pub struct Partie {
-    pub board: CBoard,
-    pub tables: AttackTables,
-    pub coups_joues: Vec<Move>,
-    pub repetitions: HashMap<ClePosition, u32>,
-}
-```
-
-Quand la partie commence:
-
-```rust
-let mut repetitions = HashMap::new();
-let cle = cle_position(&board);
-repetitions.insert(cle, 1);
-```
-
-Apres chaque coup:
-
-```rust
-let cle = cle_position(&self.board);
-let compteur = self.repetitions.entry(cle).or_insert(0);
-*compteur += 1;
-```
-
-Nouvel etat:
-
-```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EtatPartie {
-    EnCours,
-    Mat,
-    Pat,
-    Nulle50Coups,
-    NulleRepetition,
-}
-```
-
-Detection:
-
-```rust
-if self.repetitions.get(&cle_position(&self.board)).copied().unwrap_or(0) >= 3 {
-    return EtatPartie::NulleRepetition;
-}
-```
-
-Objectif de fin de journee:
-
-- une position vue trois fois donne `NulleRepetition`;
-- une position vue deux fois ne donne pas encore nulle;
-- les anciens tests passent encore.
-
-## Jour 8: lire un coup humain en notation
-
-But: transformer une entree comme `e2e4` en vrai `Move` legal.
-
-Principe:
-
-1. lire la chaine;
-2. convertir `from` et `to`;
-3. generer les coups legaux;
-4. chercher un coup legal qui correspond.
-
-Exemple:
-
-```rust
-pub fn trouver_coup_legal(
-    board: &mut CBoard,
-    tables: &AttackTables,
-    texte: &str,
-) -> Option<Move> {
-    if texte.len() < 4 {
-        return None;
-    }
-
-    let from = coord_to_square_index(&texte[0..2]).ok()?;
-    let to = coord_to_square_index(&texte[2..4]).ok()?;
-    let promotion_demandee = if texte.len() == 5 {
-        let lettre = texte.chars().nth(4)?;
-
-        match (lettre, board.side_to_move) {
-            ('q' | 'Q', Color::Blanc) => Some(Pieces::DameBlanche),
-            ('r' | 'R', Color::Blanc) => Some(Pieces::TourBlanche),
-            ('b' | 'B', Color::Blanc) => Some(Pieces::FouBlanc),
-            ('n' | 'N', Color::Blanc) => Some(Pieces::CavalierBlanc),
-
-            ('q' | 'Q', Color::Noir) => Some(Pieces::DameNoire),
-            ('r' | 'R', Color::Noir) => Some(Pieces::TourNoire),
-            ('b' | 'B', Color::Noir) => Some(Pieces::FouNoir),
-            ('n' | 'N', Color::Noir) => Some(Pieces::CavalierNoir),
-
-            _ => return None,
-        }
-    } else {
-        None
-    };
-    generate_legal_move(board, tables)
-        .into_iter()
-        .find(|mv| mv.from == from && mv.to == to)
-}
-```
-
-Attention:
-
-- les promotions ont parfois une lettre en plus, par exemple `e7e8q`;
-- il faudra comparer aussi `promotion` si le texte contient 5 caracteres.
-
-Objectif de fin de journee:
-
-- `e2e4` trouve un coup legal depuis la position initiale;
-- `e2e5` est refuse;
-- une promotion comme `a7a8q` peut etre reconnue plus tard.
-
-## Jour 9: creer une boucle de partie simple
-
-But: faire jouer une partie dans le terminal.
-
-Schema:
-
-```rust
-loop {
-    affichage_position_complete(&partie.board);
-
-    match partie.etat() {
-        EtatPartie::EnCours => {}
-        EtatPartie::Mat => {
-            println!("Echec et mat");
-            break;
-        }
-        EtatPartie::Pat => {
-            println!("Pat");
-            break;
-        }
-        EtatPartie::Nulle50Coups => {
-            println!("Nulle par regle des 50 coups");
-            break;
-        }
-        EtatPartie::NulleRepetition => {
-            println!("Nulle par repetition");
-            break;
-        }
-    }
-
-    // lire un coup humain, verifier, jouer
-}
-```
-
-Objectif de fin de journee:
-
-- la boucle affiche la position;
-- elle accepte un coup legal;
-- elle refuse un coup illegal;
-- elle s'arrete sur mat, pat ou nulle.
-
-## Jour 10: creer une evaluation materielle
-
-But: donner un score a une position.
-
-Valeurs simples:
-
-- pion = 100;
-- cavalier = 320;
-- fou = 330;
-- tour = 500;
-- dame = 900;
-- roi = 0.
-
-Exemple:
-
-```rust
-pub fn evaluation_materielle(board: &CBoard) -> i32 {
-    let valeurs = [
-        (Pieces::PionBlanc, 100),
-        (Pieces::CavalierBlanc, 320),
-        (Pieces::FouBlanc, 330),
-        (Pieces::TourBlanche, 500),
-        (Pieces::DameBlanche, 900),
-        (Pieces::PionNoir, -100),
-        (Pieces::CavalierNoir, -320),
-        (Pieces::FouNoir, -330),
-        (Pieces::TourNoire, -500),
-        (Pieces::DameNoire, -900),
-    ];
-
+pub fn evaluation_blanc(board: &CBoard) -> i32 {
     let mut score = 0;
 
-    for (piece, valeur) in valeurs {
-        let nombre = board.piece_bb[piece as usize].count_ones() as i32;
-        score += nombre * valeur;
+    score += evaluation_materielle(board);
+    score += evaluation_cavaliers(board);
+    score += evaluation_paire_de_fous(board);
+    score += evaluation_roque(board);
+
+    score
+}
+```
+
+C'est une bonne structure.
+
+Elle permet de separer les idees:
+
+```text
+evaluation_materielle       -> combien valent les pieces
+evaluation_cavaliers        -> est-ce que les cavaliers sont bien places
+evaluation_paire_de_fous    -> bonus si on a deux fous
+evaluation_roque            -> bonus si le roi est roque
+```
+
+Ensuite, pour utiliser cette evaluation dans negamax, tu fais:
+
+```rust
+pub fn evaluation_negamax(board: &CBoard) -> i32 {
+    let score = evaluation_blanc(board);
+
+    match board.side_to_move {
+        Color::Blanc => score,
+        Color::Noir => -score,
+    }
+}
+```
+
+C'est correct.
+
+Pourquoi?
+
+Parce que `evaluation_blanc` donne toujours un score du point de vue des Blancs.
+
+Exemples:
+
+```text
++300  -> les Blancs sont mieux
+-300  -> les Noirs sont mieux
+```
+
+Mais dans negamax, on veut toujours evaluer du point de vue du joueur qui doit jouer.
+
+Donc:
+
+```text
+si c'est aux Blancs de jouer : on garde le score
+si c'est aux Noirs de jouer  : on inverse le score
+```
+
+---
+
+# 2. Corrections importantes a faire dans ton code actuel
+
+Avant de continuer vers la quiescence search ou Zobrist, il faut corriger quelques points.
+
+---
+
+## 2.1 Corriger `score_ordre_coup`
+
+Dans ton code actuel, tu as ceci:
+
+```rust
+MoveFlag::Capture | MoveFlag::EnPassant => (10 * (mv.piece) -valeur_piece(mv.captured)),
+```
+
+Ce code ne peut pas marcher correctement.
+
+Problemes:
+
+1. `mv.piece` est une valeur de type `Pieces`, pas un nombre.
+2. `mv.captured` est un `Option<Pieces>`, pas directement une piece.
+3. Ta fonction `valeur_piece` retourne des valeurs positives pour les Blancs et negatives pour les Noirs.
+4. Pour MVV-LVA, on ne veut pas une valeur signee. On veut la valeur absolue de la piece.
+
+Pour l'ordre des captures, il faut une fonction qui donne toujours une valeur positive.
+
+Exemple:
+
+```rust
+fn valeur_piece_abs(piece: Pieces) -> i32 {
+    match piece {
+        Pieces::PionBlanc | Pieces::PionNoir => 100,
+        Pieces::CavalierBlanc | Pieces::CavalierNoir => 320,
+        Pieces::FouBlanc | Pieces::FouNoir => 330,
+        Pieces::TourBlanche | Pieces::TourNoire => 500,
+        Pieces::DameBlanche | Pieces::DameNoire => 900,
+        Pieces::RoiBlanc | Pieces::RoiNoir => 20_000,
+        _ => 0,
+    }
+}
+```
+
+Ensuite, tu peux corriger ton ordre de coups comme ceci:
+
+```rust
+pub fn score_ordre_coup(mv: &Move) -> i32 {
+    match mv.flag {
+        MoveFlag::Promotion | MoveFlag::PromotionCapture => {
+            let mut score = 8000;
+
+            if let Some(promotion) = mv.promotion {
+                score += valeur_piece_abs(promotion);
+            }
+
+            if let Some(piece_capturee) = mv.captured {
+                score += 10 * valeur_piece_abs(piece_capturee) - valeur_piece_abs(mv.piece);
+            }
+
+            score
+        }
+
+        MoveFlag::Capture | MoveFlag::EnPassant => {
+            let valeur_capturee = match mv.captured {
+                Some(piece) => valeur_piece_abs(piece),
+                None => 100,
+            };
+
+            let valeur_attaquante = valeur_piece_abs(mv.piece);
+
+            1000 + 10 * valeur_capturee - valeur_attaquante
+        }
+
+        MoveFlag::Castling => 100,
+
+        _ => 0,
+    }
+}
+```
+
+Pourquoi mettre `1000 +` devant les captures?
+
+Parce que tu veux que les captures soient generalement regardees avant les coups calmes.
+
+Ensuite MVV-LVA classe les captures entre elles.
+
+Exemples:
+
+```text
+pion prend dame       -> tres prioritaire
+cavalier prend tour   -> interessant
+dame prend pion       -> moins prioritaire
+tour prend pion       -> moins prioritaire
+```
+
+La formule:
+
+```rust
+10 * valeur_piece(piece_capturee) - valeur_piece(piece_attaquante)
+```
+
+sert uniquement a ordonner les captures.
+
+Elle ne remplace pas l'evaluation materielle.
+
+L'evaluation materielle dit:
+
+```text
+apres avoir joue le coup, est-ce que ma position est bonne?
+```
+
+MVV-LVA dit:
+
+```text
+dans quel ordre dois-je tester les coups pour rendre alpha-beta plus rapide?
+```
+
+Ce sont deux choses differentes.
+
+---
+
+## 2.2 Trier les coups proprement
+
+Tu as actuellement:
+
+```rust
+moves.sort_by_key(|mv| -score_ordre_coup(mv));
+```
+
+Cela fonctionne souvent, mais une version plus propre est d'utiliser `Reverse`.
+
+Ajoute en haut du fichier:
+
+```rust
+use std::cmp::Reverse;
+```
+
+Puis fais:
+
+```rust
+moves.sort_by_key(|mv| Reverse(score_ordre_coup(mv)));
+```
+
+Même chose dans `meilleur_coup`.
+
+---
+
+## 2.3 Corriger le bug du mat
+
+Dans ton alpha-beta, tu as:
+
+```rust
+return --SCORE_MAT + depth as i32;
+```
+
+Il faut corriger en:
+
+```rust
+return -SCORE_MAT + depth as i32;
+```
+
+Pourquoi `+ depth as i32`?
+
+Parce que cela permet de preferer les mats rapides.
+
+Exemple:
+
+```text
+mat en 1 -> score tres bon
+mat en 3 -> score bon, mais moins urgent
+```
+
+En negamax, quand le joueur au trait est mat, c'est mauvais pour lui.
+
+Donc on retourne:
+
+```rust
+-SCORE_MAT + depth as i32
+```
+
+---
+
+## 2.4 Remplacer `-10000` par `-INF`
+
+Dans ton code, tu as:
+
+```rust
+let mut meilleure = -10000;
+```
+
+Mais tu as deja defini:
+
+```rust
+const INF: i32 = 1_000_000;
+```
+
+Donc il vaut mieux faire:
+
+```rust
+let mut meilleure = -INF;
+```
+
+C'est plus coherent et plus robuste.
+
+A corriger dans:
+
+```rust
+evaluation_min_max
+evaluation_negamax_alpha_beta
+```
+
+---
+
+## 2.5 Corriger l'evaluation des cavaliers noirs
+
+Tu as actuellement:
+
+```rust
+while let Some(square) = pop_lsb(&mut cavaliers_noirs) {
+    let mirrored = mirror_square(square);
+    score -= BONUS_CAVALIER[square as usize];
+}
+```
+
+Probleme:
+
+Tu calcules `mirrored`, mais tu ne l'utilises pas.
+
+Il faut faire:
+
+```rust
+while let Some(square) = pop_lsb(&mut cavaliers_noirs) {
+    let mirrored = mirror_square(square);
+    score -= BONUS_CAVALIER[mirrored as usize];
+}
+```
+
+Pourquoi?
+
+Ton tableau `BONUS_CAVALIER` est ecrit du point de vue des Blancs.
+
+Un cavalier blanc avance vers le haut du plateau.
+
+Un cavalier noir avance vers le bas du plateau.
+
+Donc pour evaluer une piece noire avec une table blanche, il faut retourner verticalement la case.
+
+---
+
+# 3. Explication de `mirror_square`
+
+Tu as cette fonction:
+
+```rust
+fn mirror_square(square: u8) -> u8 {
+    square ^ 56
+}
+```
+
+Elle sert a retourner une case verticalement.
+
+Avec ton systeme:
+
+```text
+0  = a1
+1  = b1
+2  = c1
+...
+7  = h1
+
+8  = a2
+...
+56 = a8
+63 = h8
+```
+
+La fonction:
+
+```rust
+square ^ 56
+```
+
+fait une symetrie verticale.
+
+Exemples:
+
+```text
+a1 -> a8
+b1 -> b8
+e2 -> e7
+d4 -> d5
+a8 -> a1
+```
+
+Pourquoi c'est utile?
+
+Parce que ton tableau `BONUS_CAVALIER` est pense pour les Blancs.
+
+Si un cavalier blanc est en d4, tu regardes directement:
+
+```rust
+BONUS_CAVALIER[d4]
+```
+
+Mais si un cavalier noir est en d5, c'est l'equivalent d'un cavalier blanc en d4.
+
+Donc tu dois faire:
+
+```rust
+BONUS_CAVALIER[mirror_square(d5)]
+```
+
+Version corrigee:
+
+```rust
+fn evaluation_cavaliers(board: &CBoard) -> i32 {
+    let mut score = 0;
+
+    let mut cavaliers_blancs = board.piece_bb[Pieces::CavalierBlanc as usize];
+
+    while let Some(square) = pop_lsb(&mut cavaliers_blancs) {
+        score += BONUS_CAVALIER[square as usize];
+    }
+
+    let mut cavaliers_noirs = board.piece_bb[Pieces::CavalierNoir as usize];
+
+    while let Some(square) = pop_lsb(&mut cavaliers_noirs) {
+        let mirrored = mirror_square(square);
+        score -= BONUS_CAVALIER[mirrored as usize];
     }
 
     score
 }
 ```
 
-Convention conseillee:
+---
 
-- score positif = avantage blanc;
-- score negatif = avantage noir.
+# 4. Ce qu'il ne faut pas encore faire
 
-Objectif de fin de journee:
+Ne commence pas maintenant:
 
-- la position initiale vaut 0;
-- une position ou les blancs ont une dame en plus est positive;
-- une position ou les noirs ont une dame en plus est negative.
-
-## Jour 11: faire un minimax simple
-
-But: choisir un coup automatiquement.
-
-Idee:
-
-```rust
-pub fn minimax(board: &mut CBoard, tables: &AttackTables, depth: u32) -> i32 {
-    if depth == 0 {
-        return evaluation_materielle(board);
-    }
-
-    let coups = generate_legal_move(board, tables);
-
-    if coups.is_empty() {
-        if is_king_in_check(board, tables, board.side_to_move) {
-            return -100000;
-        }
-        return 0;
-    }
-    
-    let mut meilleur = -1000000;
-
-    for mv in coups {
-        let old_board = board.clone();
-        make_move(board, mv);
-        let score = -minimax(board, tables, depth - 1);
-        *board = old_board;
-
-        if score > meilleur {
-            meilleur = score;
-        }
-    }
-
-    meilleur
-}
+```text
+table de transposition
+Zobrist
+UCI
+gestion du temps avancee
+evaluation ultra complexe des pions
+evaluation avancee de la securite du roi
+moteur d'ouverture
+null move pruning
+late move reductions
+futility pruning
+aspiration windows
 ```
 
-Remarque:
+Ces elements sont utiles, mais trop tot pour ton moteur actuel.
 
-- cette forme utilise le style `negamax`, plus simple que minimax classique;
-- le score doit etre pense du point de vue du joueur qui doit jouer.
+La priorite est:
 
-Objectif de fin de journee:
+```text
+1. evaluation propre
+2. recherche stable
+3. tests simples
+4. IA qui joue legalement
+5. IA qui evite les grosses erreurs tactiques
+```
 
-- l'IA peut choisir un coup a profondeur 1;
-- elle prefere une capture gagnante a un coup calme;
-- elle ne joue jamais un coup illegal.
+Si tu vas trop vite vers Zobrist ou la table de transposition, tu vas rendre les bugs beaucoup plus difficiles a comprendre.
 
-## Jour 12: choisir le meilleur coup
+---
 
-But: retourner le `Move`, pas seulement le score.
+# 5. Etape 15 — Stabiliser l'evaluation actuelle
 
-Exemple:
+## 15.1 Ajouter `INF` et `SCORE_MAT`
+
+Tu as deja:
+
+```rust
+const SCORE_MAT: i32 = 100_000;
+const INF: i32 = 1_000_000;
+```
+
+C'est bien.
+
+Utilisation conseillee:
+
+```rust
+let mut meilleur_score = -INF;
+let beta = INF;
+let mut alpha = -INF;
+```
+
+Et pour le mat:
+
+```rust
+return -SCORE_MAT + depth as i32;
+```
+
+---
+
+## 15.2 Garder une seule recherche principale
+
+Tu peux garder `evaluation_min_max` pour apprendre, mais la vraie fonction a utiliser doit etre:
+
+```rust
+evaluation_negamax_alpha_beta
+```
+
+Idealement, a terme:
+
+```rust
+pub fn negamax_alpha_beta(
+    board: &mut CBoard,
+    tables: &AttackTables,
+    depth: u32,
+    alpha: i32,
+    beta: i32,
+) -> i32
+```
+
+Le nom `evaluation_negamax_alpha_beta` marche, mais il est un peu long.
+
+Plus tard, tu pourras renommer:
+
+```rust
+evaluation_negamax_alpha_beta
+```
+
+en:
+
+```rust
+negamax_alpha_beta
+```
+
+Parce que ce n'est pas juste une evaluation.
+
+C'est une recherche.
+
+---
+
+## 15.3 Corriger `meilleur_coup`
+
+Ta fonction est deja presque bonne:
 
 ```rust
 pub fn meilleur_coup(
@@ -624,40 +547,936 @@ pub fn meilleur_coup(
     tables: &AttackTables,
     depth: u32,
 ) -> Option<Move> {
-    let coups = generate_legal_move(board, tables);
+    let mut coups = generate_legal_move(board, tables);
+    coups.sort_by_key(|mv| Reverse(score_ordre_coup(mv)));
+
     let mut meilleur_mv = None;
-    let mut meilleur_score = -1000000;
+    let mut meilleur_score = -INF;
+    let mut alpha = -INF;
+    let beta = INF;
 
     for mv in coups {
         let old_board = board.clone();
+
         make_move(board, mv);
-        let score = -minimax(board, tables, depth - 1);
+
+        let score = -evaluation_negamax_alpha_beta(
+            board,
+            tables,
+            depth - 1,
+            -beta,
+            -alpha,
+        );
+
         *board = old_board;
 
         if score > meilleur_score {
-            meilleur_score = score;
             meilleur_mv = Some(mv);
+            meilleur_score = score;
         }
+
+        alpha = alpha.max(score);
     }
 
     meilleur_mv
 }
 ```
 
-Objectif de fin de journee:
+Attention:
 
-- `meilleur_coup` retourne un coup legal;
-- le programme peut jouer humain contre IA;
-- profondeur 2 fonctionne sur une position simple.
+Si `depth == 0`, alors `depth - 1` pose probleme.
 
-## Jour 13: ajouter alpha-beta
+Tu peux securiser:
 
-But: accelerer la recherche.
+```rust
+if depth == 0 {
+    return None;
+}
+```
+
+Au debut de la fonction.
+
+Version plus sure:
+
+```rust
+pub fn meilleur_coup(
+    board: &mut CBoard,
+    tables: &AttackTables,
+    depth: u32,
+) -> Option<Move> {
+    if depth == 0 {
+        return None;
+    }
+
+    let mut coups = generate_legal_move(board, tables);
+    coups.sort_by_key(|mv| Reverse(score_ordre_coup(mv)));
+
+    let mut meilleur_mv = None;
+    let mut meilleur_score = -INF;
+    let mut alpha = -INF;
+    let beta = INF;
+
+    for mv in coups {
+        let old_board = board.clone();
+
+        make_move(board, mv);
+
+        let score = -evaluation_negamax_alpha_beta(
+            board,
+            tables,
+            depth - 1,
+            -beta,
+            -alpha,
+        );
+
+        *board = old_board;
+
+        if score > meilleur_score {
+            meilleur_mv = Some(mv);
+            meilleur_score = score;
+        }
+
+        alpha = alpha.max(score);
+    }
+
+    meilleur_mv
+}
+```
+
+---
+
+# 6. Etape 16 — MVV-LVA pour l'ordre des captures
+
+## 16.1 Probleme actuel
+
+Avant MVV-LVA, toutes les captures peuvent etre considerees comme presque equivalentes.
+
+Mais ce n'est pas vrai.
+
+Exemples:
+
+```text
+pion prend dame       -> excellent a regarder en premier
+cavalier prend dame   -> tres interessant
+dame prend pion       -> souvent moins prioritaire
+tour prend pion       -> pas forcement urgent
+```
+
+Alpha-beta devient beaucoup plus efficace si les bons coups sont testes en premier.
+
+---
+
+## 16.2 Principe de MVV-LVA
+
+MVV-LVA signifie:
+
+```text
+Most Valuable Victim - Least Valuable Attacker
+```
+
+En francais:
+
+```text
+Victime la plus chere - Attaquant le moins cher
+```
+
+L'idee est simple:
+
+```text
+capturer une piece chere avec une piece faible est souvent interessant
+capturer une piece faible avec une piece chere est moins prioritaire
+```
+
+Formule:
+
+```rust
+score = 10 * valeur_piece(piece_capturee) - valeur_piece(piece_attaquante)
+```
+
+Exemple:
+
+```text
+pion prend dame:
+10 * 900 - 100 = 8900
+
+dame prend pion:
+10 * 100 - 900 = 100
+```
+
+Donc le moteur regardera avant:
+
+```text
+pion prend dame
+```
+
+et seulement apres:
+
+```text
+dame prend pion
+```
+
+---
+
+## 16.3 Attention importante
+
+MVV-LVA ne dit pas que le coup est bon.
+
+MVV-LVA dit seulement:
+
+```text
+ce coup merite d'etre analyse tot
+```
+
+C'est la recherche alpha-beta qui dira ensuite si le coup est vraiment bon.
+
+Exemple:
+
+```text
+pion prend dame
+```
+
+peut etre mauvais si la dame est empoisonnee et que tu te fais mater juste apres.
+
+Donc MVV-LVA est un outil d'ordre des coups, pas une evaluation finale.
+
+---
+
+# 7. Etape 17 — Quiescence search simple
+
+## 17.1 Probleme a resoudre: l'effet horizon
+
+Ton moteur s'arrete quand:
+
+```rust
+depth == 0
+```
+
+Et il retourne:
+
+```rust
+evaluation_negamax(board)
+```
+
+Probleme:
+
+Il peut s'arreter au milieu d'une suite de captures.
+
+Exemple:
+
+```text
+1. ton IA prend une dame
+2. profondeur terminee
+3. evaluation: super, je gagne une dame
+4. mais au coup suivant l'adversaire reprend ta dame
+```
+
+Le moteur croit avoir gagne du materiel, mais il s'est arrete trop tot.
+
+C'est ce qu'on appelle l'effet horizon.
+
+---
+
+## 17.2 Idee de la quiescence search
+
+Au lieu de s'arreter brutalement a profondeur 0, on continue uniquement les coups tactiques.
+
+Premiere version conseillee:
+
+```text
+a depth == 0:
+    ne pas retourner directement evaluation
+    lancer quiescence_search
+```
+
+La quiescence search regarde seulement:
+
+```text
+captures
+```
+
+Pas encore:
+
+```text
+echecs
+promotions complexes
+coups calmes
+menaces
+```
+
+---
+
+## 17.3 Premiere version simple
+
+Structure conseillee:
+
+```rust
+pub fn quiescence(
+    board: &mut CBoard,
+    tables: &AttackTables,
+    mut alpha: i32,
+    beta: i32,
+) -> i32 {
+    let stand_pat = evaluation_negamax(board);
+
+    if stand_pat >= beta {
+        return beta;
+    }
+
+    if stand_pat > alpha {
+        alpha = stand_pat;
+    }
+
+    let mut moves = generate_legal_move(board, tables);
+
+    moves.retain(|mv| {
+        mv.flag == MoveFlag::Capture
+            || mv.flag == MoveFlag::EnPassant
+            || mv.flag == MoveFlag::PromotionCapture
+    });
+
+    moves.sort_by_key(|mv| Reverse(score_ordre_coup(mv)));
+
+    for mv in moves {
+        let old_board = board.clone();
+
+        make_move(board, mv);
+
+        let score = -quiescence(board, tables, -beta, -alpha);
+
+        *board = old_board;
+
+        if score >= beta {
+            return beta;
+        }
+
+        if score > alpha {
+            alpha = score;
+        }
+    }
+
+    alpha
+}
+```
+
+Ensuite dans alpha-beta:
+
+```rust
+if depth == 0 {
+    return quiescence(board, tables, alpha, beta);
+}
+```
+
+Au lieu de:
+
+```rust
+if depth == 0 {
+    return evaluation_negamax(board);
+}
+```
+
+---
+
+## 17.4 Pourquoi `stand_pat`?
+
+`stand_pat` signifie:
+
+```text
+score de la position si je ne fais aucune capture supplementaire
+```
 
 Exemple:
 
 ```rust
-pub fn negamax_alpha_beta(
+let stand_pat = evaluation_negamax(board);
+```
+
+Si la position est deja assez bonne pour depasser beta, tu peux couper:
+
+```rust
+if stand_pat >= beta {
+    return beta;
+}
+```
+
+Sinon tu testes les captures pour voir si tu peux ameliorer alpha.
+
+---
+
+## 17.5 Limite de securite possible
+
+Au debut, ta quiescence peut parfois devenir trop longue s'il y a beaucoup de captures.
+
+Tu peux ajouter une profondeur limite:
+
+```rust
+pub fn quiescence(
+    board: &mut CBoard,
+    tables: &AttackTables,
+    mut alpha: i32,
+    beta: i32,
+    qdepth: u32,
+) -> i32 {
+    if qdepth == 0 {
+        return evaluation_negamax(board);
+    }
+
+    // reste du code
+}
+```
+
+Et appeler:
+
+```rust
+let score = -quiescence(board, tables, -beta, -alpha, qdepth - 1);
+```
+
+Version simple conseillee:
+
+```text
+qdepth = 4 ou 6
+```
+
+---
+
+# 8. Etape 18 — Tests IA tactiques simples
+
+Avant d'ajouter des optimisations, il faut ajouter des tests.
+
+Le but n'est pas d'avoir 100 tests.
+
+Le but est d'avoir quelques tests fiables.
+
+---
+
+## 18.1 Test: l'IA prend une dame gratuite
+
+Position a construire:
+
+```text
+un roi blanc
+un roi noir
+une dame noire attaquable gratuitement
+une piece blanche qui peut la capturer
+```
+
+Objectif:
+
+```text
+meilleur_coup doit choisir la capture de la dame
+```
+
+Pseudo-test:
+
+```rust
+#[test]
+fn ia_prend_dame_gratuite() {
+    let tables = init_attack_tables();
+
+    let mut board = board_from_fen(
+        "7k/8/8/8/3q4/4N3/8/K7 w - - 0 1"
+    ).unwrap();
+
+    let mv = meilleur_coup(&mut board, &tables, 2).unwrap();
+
+    assert_eq!(mv.to, 27); // a adapter selon la case de la dame
+}
+```
+
+Il faut verifier les index exacts selon ta position.
+
+---
+
+## 18.2 Test: l'IA trouve un mat en 1
+
+Objectif:
+
+```text
+si un mat immediat existe, l'IA doit le jouer
+```
+
+Ce test verifie que:
+
+```text
+generation legale OK
+detection echec OK
+score de mat OK
+negamax OK
+```
+
+---
+
+## 18.3 Test: l'IA ne joue pas un coup illegal
+
+Objectif:
+
+```text
+meilleur_coup doit toujours retourner un coup contenu dans generate_legal_move
+```
+
+Exemple:
+
+```rust
+#[test]
+fn ia_joue_un_coup_legal() {
+    let tables = init_attack_tables();
+
+    let mut board = board_from_fen(
+        "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+    ).unwrap();
+
+    let coups_legaux = generate_legal_move(&mut board, &tables);
+    let mv = meilleur_coup(&mut board, &tables, 3).unwrap();
+
+    assert!(coups_legaux.contains(&mv));
+}
+```
+
+---
+
+## 18.4 Test: l'IA prefere promouvoir en dame
+
+Objectif:
+
+```text
+si un pion peut promouvoir, l'IA doit preferer la dame
+```
+
+La promotion en dame doit generalement avoir le meilleur score.
+
+Attention:
+
+Ce test suppose que ta generation des promotions donne bien plusieurs choix:
+
+```text
+promotion dame
+promotion tour
+promotion fou
+promotion cavalier
+```
+
+---
+
+## 18.5 Test: l'IA evite une capture perdante
+
+Ce test est plus difficile.
+
+Objectif:
+
+```text
+a profondeur suffisante, l'IA ne doit pas prendre une piece si elle perd encore plus derriere
+```
+
+Exemple conceptuel:
+
+```text
+dame prend pion
+mais ensuite une tour prend la dame
+```
+
+Ce test sera plus fiable apres la quiescence search.
+
+---
+
+# 9. Etape 19 — Interface terminal propre
+
+Avant de faire l'interface web, il faut un terminal clair.
+
+Objectif:
+
+```text
+voir ce que l'IA fait
+comprendre pourquoi elle joue
+debugger plus facilement
+```
+
+Afficher a chaque tour:
+
+```text
+trait
+score actuel
+profondeur IA
+meilleur coup choisi
+temps de calcul
+etat de partie
+nombre de coups legaux
+```
+
+Exemple d'affichage:
+
+```text
+Trait: Blanc
+Score: +120
+Profondeur IA: 4
+Coups legaux: 32
+Meilleur coup IA: e2e4
+Temps de calcul: 243 ms
+Etat: EnCours
+```
+
+---
+
+## 9.1 Mesurer le temps de calcul
+
+Utiliser:
+
+```rust
+use std::time::Instant;
+```
+
+Exemple:
+
+```rust
+let start = Instant::now();
+
+let mv = meilleur_coup(&mut board, &tables, depth);
+
+let duree = start.elapsed();
+
+println!("Temps de calcul: {} ms", duree.as_millis());
+```
+
+---
+
+## 9.2 Afficher le score
+
+Tu peux afficher:
+
+```rust
+let score = evaluation_blanc(&board);
+```
+
+Puis:
+
+```rust
+println!("Score: {}", score);
+```
+
+Interpretation:
+
+```text
++100  -> avantage blanc d'environ un pion
++300  -> avantage blanc d'environ une piece mineure
+-500  -> avantage noir d'environ une tour
+```
+
+---
+
+# 10. Etape 20 — Zobrist hashing
+
+A ne faire qu'apres stabilisation.
+
+Actuellement, tu peux identifier une position avec:
+
+```rust
+ClePosition {
+    piece_bb,
+    side_to_move,
+    castling_rights,
+    en_passant_square,
+}
+```
+
+C'est correct pour la repetition.
+
+Mais pour une table de transposition, ce sera trop lourd.
+
+Objectif futur:
+
+```text
+remplacer progressivement ClePosition par une cle u64 rapide
+```
+
+Cette cle s'appelle une cle Zobrist.
+
+Principe:
+
+```text
+chaque piece sur chaque case correspond a un nombre aleatoire u64
+on XOR les nombres correspondant a la position
+```
+
+Exemple conceptuel:
+
+```rust
+hash ^= zobrist_piece[piece][square];
+hash ^= zobrist_side_to_move;
+hash ^= zobrist_castling[castling_rights];
+hash ^= zobrist_en_passant[file];
+```
+
+Mais pas maintenant.
+
+---
+
+# 11. Etape 21 — Table de transposition
+
+Apres Zobrist, tu pourras ajouter une table de transposition.
+
+Objectif:
+
+```text
+eviter de recalculer plusieurs fois la meme position
+```
+
+Structure future:
+
+```rust
+pub struct EntreeTransposition {
+    pub depth: u32,
+    pub score: i32,
+    pub flag: TypeNoeud,
+    pub meilleur_coup: Option<Move>,
+}
+```
+
+Avec:
+
+```rust
+pub enum TypeNoeud {
+    Exact,
+    LowerBound,
+    UpperBound,
+}
+```
+
+La table pourra etre:
+
+```rust
+HashMap<u64, EntreeTransposition>
+```
+
+Mais seulement quand:
+
+```text
+negamax fonctionne
+alpha-beta fonctionne
+quiescence fonctionne
+tests tactiques OK
+```
+
+---
+
+# 12. Etape 22 — Iterative deepening
+
+L'iterative deepening consiste a chercher successivement:
+
+```text
+profondeur 1
+profondeur 2
+profondeur 3
+profondeur 4
+...
+```
+
+Au lieu de lancer directement:
+
+```text
+profondeur 5
+```
+
+Avantages:
+
+```text
+meilleur controle du temps
+meilleur ordre de coups
+meilleure utilisation de la table de transposition
+possibilite d'arreter proprement la recherche
+```
+
+Exemple futur:
+
+```rust
+for current_depth in 1..=max_depth {
+    let mv = meilleur_coup(board, tables, current_depth);
+    best_move = mv;
+}
+```
+
+---
+
+# 13. Etape 23 — Gestion du temps
+
+Apres iterative deepening, tu pourras ajouter une limite de temps.
+
+Exemple:
+
+```text
+l'IA a 2 secondes pour jouer
+elle retourne le meilleur coup de la derniere profondeur terminee
+```
+
+Utiliser:
+
+```rust
+std::time::Instant
+```
+
+Principe:
+
+```rust
+let start = Instant::now();
+
+for depth in 1..=max_depth {
+    if start.elapsed().as_millis() > temps_max_ms {
+        break;
+    }
+
+    best_move = meilleur_coup(board, tables, depth);
+}
+```
+
+Attention:
+
+La vraie gestion du temps doit verifier le temps aussi dans la recherche, pas seulement entre deux profondeurs.
+
+Mais pour une premiere version, verifier entre les profondeurs suffit.
+
+---
+
+# 14. Etape 24 — UCI minimal
+
+Le protocole UCI permet d'utiliser ton moteur dans une interface externe comme:
+
+```text
+Arena
+Cute Chess
+BanksiaGUI
+lichess-bot
+```
+
+Commandes minimales a gerer:
+
+```text
+uci
+isready
+position startpos moves e2e4 e7e5
+go depth 5
+bestmove g1f3
+quit
+```
+
+A ne faire qu'une fois le moteur stable.
+
+Pour l'instant, ce n'est pas prioritaire.
+
+---
+
+# 15. Ordre conseille maintenant
+
+Ordre exact recommande:
+
+```text
+15.1 Verifier INF et SCORE_MAT
+15.2 Corriger --SCORE_MAT en -SCORE_MAT
+15.3 Remplacer les -10000 par -INF
+15.4 Corriger valeur_piece_abs
+15.5 Corriger score_ordre_coup avec MVV-LVA
+15.6 Trier avec Reverse(score_ordre_coup)
+15.7 Corriger evaluation_cavaliers pour utiliser mirrored
+15.8 Ajouter tests d'evaluation simples
+15.9 Ajouter test IA joue un coup legal
+16. Ajouter MVV-LVA proprement
+17. Ajouter quiescence search simple
+18. Ajouter tests tactiques IA
+19. Faire un terminal propre
+20. Ajouter Zobrist
+21. Ajouter table de transposition
+22. Ajouter iterative deepening
+23. Ajouter gestion du temps
+24. Ajouter UCI minimal
+```
+
+---
+
+# 16. Version corrigee minimale des fonctions importantes
+
+## 16.1 `valeur_piece_abs`
+
+```rust
+fn valeur_piece_abs(piece: Pieces) -> i32 {
+    match piece {
+        Pieces::PionBlanc | Pieces::PionNoir => 100,
+        Pieces::CavalierBlanc | Pieces::CavalierNoir => 320,
+        Pieces::FouBlanc | Pieces::FouNoir => 330,
+        Pieces::TourBlanche | Pieces::TourNoire => 500,
+        Pieces::DameBlanche | Pieces::DameNoire => 900,
+        Pieces::RoiBlanc | Pieces::RoiNoir => 20_000,
+        _ => 0,
+    }
+}
+```
+
+---
+
+## 16.2 `score_ordre_coup`
+
+```rust
+pub fn score_ordre_coup(mv: &Move) -> i32 {
+    match mv.flag {
+        MoveFlag::Promotion | MoveFlag::PromotionCapture => {
+            let mut score = 8000;
+
+            if let Some(promotion) = mv.promotion {
+                score += valeur_piece_abs(promotion);
+            }
+
+            if let Some(piece_capturee) = mv.captured {
+                score += 10 * valeur_piece_abs(piece_capturee)
+                    - valeur_piece_abs(mv.piece);
+            }
+
+            score
+        }
+
+        MoveFlag::Capture | MoveFlag::EnPassant => {
+            let valeur_capturee = match mv.captured {
+                Some(piece) => valeur_piece_abs(piece),
+                None => 100,
+            };
+
+            let valeur_attaquante = valeur_piece_abs(mv.piece);
+
+            1000 + 10 * valeur_capturee - valeur_attaquante
+        }
+
+        MoveFlag::Castling => 100,
+
+        _ => 0,
+    }
+}
+```
+
+---
+
+## 16.3 `evaluation_cavaliers`
+
+```rust
+fn evaluation_cavaliers(board: &CBoard) -> i32 {
+    let mut score = 0;
+
+    let mut cavaliers_blancs = board.piece_bb[Pieces::CavalierBlanc as usize];
+
+    while let Some(square) = pop_lsb(&mut cavaliers_blancs) {
+        score += BONUS_CAVALIER[square as usize];
+    }
+
+    let mut cavaliers_noirs = board.piece_bb[Pieces::CavalierNoir as usize];
+
+    while let Some(square) = pop_lsb(&mut cavaliers_noirs) {
+        let mirrored = mirror_square(square);
+        score -= BONUS_CAVALIER[mirrored as usize];
+    }
+
+    score
+}
+```
+
+---
+
+## 16.4 `evaluation_negamax_alpha_beta`
+
+```rust
+pub fn evaluation_negamax_alpha_beta(
     board: &mut CBoard,
     tables: &AttackTables,
     depth: u32,
@@ -665,27 +1484,38 @@ pub fn negamax_alpha_beta(
     beta: i32,
 ) -> i32 {
     if depth == 0 {
-        return evaluation_materielle(board);
+        return evaluation_negamax(board);
     }
 
-    let coups = generate_legal_move(board, tables);
+    let mut moves = generate_legal_move(board, tables);
+    moves.sort_by_key(|mv| Reverse(score_ordre_coup(mv)));
 
-    if coups.is_empty() {
+    if moves.is_empty() {
         if is_king_in_check(board, tables, board.side_to_move) {
-            return -100000;
+            return -SCORE_MAT + depth as i32;
         }
+
         return 0;
     }
 
-    let mut meilleur = -1000000;
+    let mut meilleure = -INF;
 
-    for mv in coups {
+    for mv in moves {
         let old_board = board.clone();
+
         make_move(board, mv);
-        let score = -negamax_alpha_beta(board, tables, depth - 1, -beta, -alpha);
+
+        let score = -evaluation_negamax_alpha_beta(
+            board,
+            tables,
+            depth - 1,
+            -beta,
+            -alpha,
+        );
+
         *board = old_board;
 
-        meilleur = meilleur.max(score);
+        meilleure = meilleure.max(score);
         alpha = alpha.max(score);
 
         if alpha >= beta {
@@ -693,134 +1523,159 @@ pub fn negamax_alpha_beta(
         }
     }
 
-    meilleur
+    meilleure
 }
 ```
 
-Objectif de fin de journee:
+---
 
-- alpha-beta donne les memes choix que minimax sur petites profondeurs;
-- la recherche devient plus rapide;
-- profondeur 3 devient plus confortable.
+# 17. Tests d'evaluation a ajouter
 
-## Jour 14: ordonner les coups
+## 17.1 Test cavalier centre meilleur que cavalier bord
 
-But: rendre alpha-beta plus efficace.
-
-Idee simple:
-
-- captures d'abord;
-- promotions ensuite;
-- coups calmes apres.
-
-Exemple:
+Ton test est bon dans l'idee:
 
 ```rust
-pub fn score_ordre_coup(mv: &Move) -> i32 {
-    match mv.flag {
-        MoveFlag::Promotion | MoveFlag::PromotionCapture => 1000,
-        MoveFlag::Capture | MoveFlag::EnPassant => 500,
-        MoveFlag::Castling => 100,
-        _ => 0,
-    }
+#[test]
+fn cavalier_centre_meilleur_que_cavalier_bord() {
+    let board_bord = board_from_fen(
+        "7k/8/8/8/8/8/N7/K7 w - - 0 1"
+    ).unwrap();
+
+    let board_centre = board_from_fen(
+        "7k/8/8/8/3N4/8/8/K7 w - - 0 1"
+    ).unwrap();
+
+    assert!(evaluation_blanc(&board_centre) > evaluation_blanc(&board_bord));
 }
 ```
 
-Trier avant la recherche:
+Ce test verifie que:
 
-```rust
-let mut coups = generate_legal_move(board, tables);
-coups.sort_by_key(|mv| -score_ordre_coup(mv));
+```text
+un cavalier central vaut mieux qu'un cavalier au bord
 ```
 
-Objectif de fin de journee:
+---
 
-- alpha-beta visite moins de positions;
-- l'IA reste correcte;
-- les tests passent encore.
-
-## Jour 15: ameliorer l'evaluation
-
-But: eviter que l'IA joue seulement pour manger des pieces.
-
-Ameliorations possibles:
-
-- bonus pour les pieces developpees;
-- malus pour roi expose;
-- bonus pour roque;
-- tables de cases pour les pieces;
-- bonus pour pions passes;
-- malus pour pions doubles.
-
-Exemple simple de table de cases:
+## 17.2 Test paire de fous
 
 ```rust
-const BONUS_CAVALIER: [i32; 64] = [
-    -50, -40, -30, -30, -30, -30, -40, -50,
-    -40, -20,   0,   0,   0,   0, -20, -40,
-    -30,   0,  10,  15,  15,  10,   0, -30,
-    -30,   5,  15,  20,  20,  15,   5, -30,
-    -30,   0,  15,  20,  20,  15,   0, -30,
-    -30,   5,  10,  15,  15,  10,   5, -30,
-    -40, -20,   0,   5,   5,   0, -20, -40,
-    -50, -40, -30, -30, -30, -30, -40, -50,
-];
-```
+#[test]
+fn paire_de_fous_donne_bonus_aux_blancs() {
+    let board_un_fou = board_from_fen(
+        "7k/8/8/8/8/8/8/K2B4 w - - 0 1"
+    ).unwrap();
 
-Objectif de fin de journee:
+    let board_deux_fous = board_from_fen(
+        "7k/8/8/8/8/8/8/K2BB3 w - - 0 1"
+    ).unwrap();
 
-- l'evaluation reste simple;
-- l'IA developpe un peu mieux ses pieces;
-- elle ne sacrifie pas trop de materiel sans raison.
-
-## Jour 16: preparer les futures optimisations
-
-But: noter les prochaines grosses ameliorations sans les faire tout de suite.
-
-Prochaines pistes:
-
-- hash Zobrist;
-- table de transposition;
-- iterative deepening;
-- quiescence search;
-- gestion du temps;
-- protocole UCI.
-
-Hash Zobrist plus tard:
-
-```rust
-pub type Zobrist = u64;
-
-pub struct TableTransposition {
-    // HashMap<Zobrist, EntreeTransposition>
+    assert!(evaluation_blanc(&board_deux_fous) > evaluation_blanc(&board_un_fou));
 }
 ```
 
-Objectif de fin de journee:
+---
 
-- ne pas ajouter trop de complexite trop tot;
-- garder une IA simple qui marche;
-- documenter les idees pour la suite.
+## 17.3 Test roque blanc
 
-## Resume de l'ordre exact
+```rust
+#[test]
+fn roque_blanc_donne_bonus() {
+    let board_non_roque = board_from_fen(
+        "7k/8/8/8/8/8/8/R3K2R w KQ - 0 1"
+    ).unwrap();
 
-Ordre conseille:
+    let board_roque = board_from_fen(
+        "7k/8/8/8/8/8/8/R4RK1 w - - 0 1"
+    ).unwrap();
 
-1. `EtatPartie` avec `EnCours`, `Mat`, `Pat`;
-2. tests de mat et pat;
-3. mise a jour de `halfmove_clock`;
-4. nulle par 50 coups;
-5. structure `Partie`;
-6. cle de position;
-7. repetition trois fois;
-8. lecture de coup humain;
-9. boucle de partie;
-10. evaluation materielle;
-11. minimax ou negamax;
-12. meilleur coup;
-13. alpha-beta;
-14. ordre des coups;
-15. evaluation plus fine;
-16. optimisations futures.
+    assert!(evaluation_blanc(&board_roque) > evaluation_blanc(&board_non_roque));
+}
+```
 
-Le plus important: ne pas commencer par une IA complexe. Une bonne IA repose d'abord sur une bonne detection des fins de partie.
+Attention:
+
+Ce test suppose que:
+
+```text
+roi blanc en g1 = square 6
+```
+
+Donc ton `evaluation_roque` donne bien:
+
+```rust
+if board.white_king_square == 6 || board.white_king_square == 2 {
+    score += 40;
+}
+```
+
+---
+
+# 18. Resume important
+
+Tu n'es pas en train de refaire ton IA.
+
+Tu fais une evolution propre.
+
+Tu as deja:
+
+```text
+materiel
+negamax
+alpha-beta
+meilleur_coup
+ordre de coups simple
+evaluation positionnelle simple
+```
+
+Maintenant tu dois faire dans cet ordre:
+
+```text
+1. corriger les petits bugs actuels
+2. rendre l'ordre de coups propre avec MVV-LVA
+3. corriger l'evaluation des cavaliers noirs
+4. ajouter quelques tests d'evaluation
+5. ajouter la quiescence search
+6. ajouter des tests tactiques
+7. seulement apres, passer a Zobrist et table de transposition
+```
+
+La transition principale est celle-ci:
+
+```rust
+pub fn evaluation_blanc(board: &CBoard) -> i32 {
+    let mut score = 0;
+
+    score += evaluation_materielle(board);
+    score += evaluation_cavaliers(board);
+    score += evaluation_paire_de_fous(board);
+    score += evaluation_roque(board);
+
+    score
+}
+```
+
+C'est le moment ou ton IA passe de:
+
+```text
+je compte les pieces
+```
+
+a:
+
+```text
+je commence a comprendre la position
+```
+
+Ne cherche pas encore a faire une evaluation parfaite.
+
+Cherche une evaluation:
+
+```text
+simple
+stable
+testable
+comprehensible
+facile a ameliorer
+```

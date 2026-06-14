@@ -1,11 +1,34 @@
 use crate::attack_tables::AttackTables;
 use crate::board::{CBoard, Color, Pieces};
-use crate::chess_move::Move;
 use crate::legality::is_king_in_check;
 use crate::make_move::make_move;
 use crate::notation::coord_to_square_index;
 use crate::pseudo_legal_move::generate_pseudo_legal_move;
+use crate::chess_move::{Move,MoveFlag};
 
+fn is_tactical_move(mv : &Move)-> bool{
+        matches!(
+            mv.flag,
+            MoveFlag::Capture | MoveFlag::EnPassant | MoveFlag::Promotion | MoveFlag::PromotionCapture
+        )
+
+    }
+pub fn generate_tactical_legal_move(board : &mut CBoard,tables: &AttackTables)-> Vec <Move>{
+    let side = board.side_to_move;
+    let mut moves = generate_pseudo_legal_move(board,tables);
+    moves.retain(|mv| is_tactical_move(mv));
+    let mut legal = Vec::new();
+    for mv in moves {
+        let old_board = board.clone();
+        make_move(board,mv);
+        if !is_king_in_check(board,tables,side){
+            legal.push(mv);
+        }
+        *board = old_board;
+
+    }
+    legal
+}
 pub fn generate_legal_move(board: &mut CBoard, tables: &AttackTables) -> Vec<Move> {
     let gen_pseudo_move = generate_pseudo_legal_move(board, tables);
     let color = board.side_to_move;
