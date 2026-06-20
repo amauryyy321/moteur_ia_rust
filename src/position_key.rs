@@ -16,3 +16,18 @@ pub fn cle_position(board: &CBoard) -> ClePosition {
         en_passant_square: board.en_passant_square,
     }
 }
+
+#[derive(Clone, Copy, Debug,PartialEq,Eq)]
+pub enum TTFlag{
+    Exact,
+    LowerBound,
+    UpperBound,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TTEntry{
+    pub depth: u32,
+    pub score: i32,
+    pub flag : TTFlag,
+    pub best_move: Option<Move>,
+}
