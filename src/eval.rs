@@ -34,6 +34,11 @@ pub struct SearchStats {
     pub qnodes: u64,
     pub cutoffs: u64,
     pub qcutoffs: u64,
+    pub tt_hits: u64,
+    pub beta_cutoffs : u64,
+    pub beta_cutoffs_first_move: u64,
+    pub null_cutoffs: u64,
+    pub lmr_researches: u64,
 }
 
 pub struct SearchLimits {
@@ -55,6 +60,11 @@ fn valeur_piece_abs(piece: Pieces) -> i32 {
         Pieces::RoiBlanc | Pieces::RoiNoir => 20000,
         _ => 0,
     }
+}
+fn score_capture_mvv_lva(mv : &Move) -> i32{
+    let victim = mv.captured.map(valeur_piece_abs).unwrap_or(100);
+    let attacker = valeur_piece_abs(mv.piece);
+    10 * victim - attacker
 }
 fn valeur_piece(piece: Pieces) -> i32 {
     let valeurs = [
@@ -111,23 +121,17 @@ fn score_ordre_coup_avec_tt(mv: &Move, tt_best: Option<Move>) -> i32 {
 }
 pub fn score_ordre_coup(mv: &Move) -> i32 {
     match mv.flag {
-        MoveFlag::Promotion | MoveFlag::PromotionCapture => {
-            let mut score = 8000;
-            if let Some(promotion) = mv.promotion {
-                score += valeur_piece_abs(promotion);
-            }
-            if let Some(piece_capturee) = mv.captured {
-                score += 10 * valeur_piece_abs(piece_capturee) - valeur_piece_abs(mv.piece);
-            }
-            score
+        MoveFlag::PromotionCapture =>{
+            let promotion = mv.promotion.map(valeur_piece_abs).unwrap_or(0);
+            20_000 + promotion + score_capture_mvv_lva(mv)
+        }
+
+        MoveFlag::Promotion => {
+            let promotion = mv.promotion.map(valeur_piece_abs).unwrap_or(0);
+            15_000 + promotion
         }
         MoveFlag::Capture | MoveFlag::EnPassant => {
-            let valeur_capture = match mv.captured {
-                Some(piece) => valeur_piece_abs(piece),
-                None => 100,
-            };
-            let valeur_attaquante = valeur_piece_abs(mv.piece);
-            1000 + 10 * valeur_capture - valeur_attaquante
+            10_000 + score_capture_mvv_lva(mv)
         }
         MoveFlag::Castling => 100,
         _ => 0,
