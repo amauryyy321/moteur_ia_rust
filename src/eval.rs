@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 const SCORE_MAT: i32 = 100_000;
 const INF: i32 = 1_000_000;
+const MAX_PLY: usize = 128;
 const BONUS_CAVALIER: [i32; 64] = [
     -50, -40, -30, -30, -30, -30, -40, -50, -40, -20, 0, 0, 0, 0, -20, -40, -30, 0, 10, 15, 15, 10,
     0, -30, -30, 5, 15, 20, 20, 15, 5, -30, -30, 0, 15, 20, 20, 15, 0, -30, -30, 5, 10, 15, 15, 10,
@@ -39,6 +40,17 @@ pub struct SearchStats {
     pub beta_cutoffs_first_move: u64,
     pub null_cutoffs: u64,
     pub lmr_researches: u64,
+}
+#[derive(Clone)]
+pub struct SearchHeuristics{
+    pub killer_moves: [[Option<Move>; 2]; MAX_PLY],
+}
+impl Default for SearchHeuristics{
+    fn default() -> Self{
+        Self{
+            killer_moves : [[None;2];MAX_PLY],
+        }
+    }
 }
 
 pub struct SearchLimits {
@@ -238,7 +250,19 @@ pub fn meilleur_coup_iterative(
     }
     best_move
 }
-
+pub fn is_quiet_move(mv : &Move) -> bool {
+    matches!(mv.flag, MoveFlag::Quiet | MoveFlag::DoublePawnPush | MoveFlag::Castling)
+}
+pub fn store_killer_move(heuristics: &mut SearchHeuristics, ply: usize, mv: Move){
+    if ply >= MAX_PLY{
+        return;
+    }
+    if heuristics.killer_moves[ply][0] == Some(mv){
+        return;
+    }
+    heuristics.killer_moves[ply][1] = heuristics.killer_moves[ply][0];
+    heuristics.killer_moves[ply][0] = Some(mv);
+}
 pub fn evaluation_negamax_alpha_beta(
     board: &mut CBoard,
     tables: &AttackTables,
@@ -248,6 +272,8 @@ pub fn evaluation_negamax_alpha_beta(
     stats: &mut SearchStats,
     tt: &mut TranspositionTable,
     limits: &SearchLimits,
+    ply : usize,
+    heuristics : &mut SearchHeuristics
 ) -> i32 {
     stats.nodes += 1;
     if limits.should_stop() {
@@ -282,6 +308,8 @@ pub fn evaluation_negamax_alpha_beta(
     let mut moves = generate_legal_move(board, tables);
     let tt_best = tt.get(&key).and_then(|entry| entry.best_move);
     moves.sort_by_key(|mv| Reverse(score_ordre_coup_avec_tt(mv, tt_best)));
+    coups.sort_by_key(|mv| Reverse(score_root_move(mv,previous_best, tt_best)));
+    coups.sort_by_key(|mv| Reverse(score_search_move(mv,tt_best,heuristics,ply)));
 
     if moves.is_empty() {
         if is_king_in_check(board, tables, board.side_to_move) {
@@ -311,6 +339,10 @@ pub fn evaluation_negamax_alpha_beta(
         alpha = alpha.max(score);
 
         if alpha >= beta {
+            if is_quiet_move(&coups){
+            store_kille_move(heuristics, ply, coups);
+            }
+
             stats.cutoffs += 1;
             break;
         }
@@ -342,6 +374,21 @@ fn score_root_move(mv: &Move, previous_best : Option<Move>,tt_best : Option<Move
     }
     score_ordre_coup(mv)
 }
+fn score_search_move(mv : &Move,tt_best: Option<Move>,heuristics: &SearchHeuristics,ply: usize)->i32{
+    if Some (*mv) == tt_best {
+        return 2_000_000;
+    }
+    if ply < MAX_PLY{
+        if heuristics.killer_moves[ply][0] == Some (*mv){
+            return 900_000;
+        }
+        if heuristics.killer_moves[ply][1] == Some (*mv){
+            return 800_000;
+        }
+
+    }
+    score_ordre_coup(mv)
+}
 pub fn meilleur_coup(
     board: &mut CBoard,
     tables: &AttackTables,
@@ -357,7 +404,9 @@ pub fn meilleur_coup(
 
     let key = cle_position(board);
     let tt_best = tt.get(&key).and_then(|entry| entry.best_move);
+    coups.sort_by_key(|mv| Reverse(score_ordre_coup_avec_tt(mv,tt_best)));
     coups.sort_by_key(|mv| Reverse(score_root_move(mv,previous_best, tt_best)));
+    coups.sort_by_key(|mv| Reverse(score_search_move(mv,tt_best,heuristics,ply)));
     let mut meilleur_mv = None;
     let mut meilleur_score = -INF;
     let mut alpha = -INF;
