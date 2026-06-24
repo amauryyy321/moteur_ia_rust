@@ -321,29 +321,211 @@ src/eval.rs, dans meilleur_coup_iterative et meilleur_coup.
 
 Le root doit aussi garder explicitement le meilleur coup de la profondeur precedente.
 
-Idee :
+Dans ton code, la fonction importante est :
 
 ```rust
-pub fn meilleur_coup_iterative(...) -> Option<Move> {
-    let mut best_move = None;
-    let mut tt = TranspositionTable::new();
+pub fn meilleur_coup_iterative(
+    board: &mut CBoard,
+    tables: &AttackTables,
+    max_depth: u32,
+) -> Option<Move>
+```
 
-    for depth in 1..=max_depth {
-        let mv = meilleur_coup(board, tables, depth, &mut tt, &limits, best_move);
+Elle contient deja :
 
-        if !limits.should_stop() && mv.is_some() {
-            best_move = mv;
-        }
+```rust
+let mut best_move = None;
+```
+
+Ce `best_move` est exactement l'information qu'on veut utiliser.
+
+Au debut :
+
+```text
+best_move = None
+```
+
+Apres depth 1 :
+
+```text
+best_move = Some(meilleur coup trouve a depth 1)
+```
+
+Apres depth 2 :
+
+```text
+best_move = Some(meilleur coup trouve a depth 2)
+```
+
+Donc quand tu appelles `meilleur_coup` pour depth 3, tu peux lui passer le meilleur coup trouve a depth 2.
+
+Ce parametre doit s'appeler :
+
+```rust
+previous_best: Option<Move>
+```
+
+Pas `tt_best`.
+
+Pourquoi ?
+
+Parce qu'il y a deux idees differentes :
+
+```text
+previous_best -> meilleur coup racine trouve a la profondeur precedente
+tt_best       -> meilleur coup stocke dans la table de transposition pour la position actuelle
+```
+
+Les deux peuvent exister en meme temps.
+
+## Changement 1 : passer `best_move` a `meilleur_coup`
+
+Où le faire :
+
+```text
+src/eval.rs, dans meilleur_coup_iterative.
+```
+
+Tu as une boucle de ce genre :
+
+```rust
+for depth in 1..=max_depth {
+    if limits.should_stop() {
+        break;
     }
 
-    best_move
+    let mv = meilleur_coup(board, tables, depth, &mut tt, &limits);
+
+    if !limits.should_stop() && mv.is_some() {
+        best_move = mv;
+    }
 }
 ```
 
-Puis dans `meilleur_coup`, trier :
+Tu veux passer `best_move` a `meilleur_coup` :
 
 ```rust
-fn score_root_move(mv: &Move, previous_best: Option<Move>, tt_best: Option<Move>) -> i32 {
+for depth in 1..=max_depth {
+    if limits.should_stop() {
+        break;
+    }
+
+    let mv = meilleur_coup(
+        board,
+        tables,
+        depth,
+        &mut tt,
+        &limits,
+        best_move,
+    );
+
+    if !limits.should_stop() && mv.is_some() {
+        best_move = mv;
+    }
+}
+```
+
+Ici, `best_move` devient le parametre `previous_best` dans `meilleur_coup`.
+
+Lecture mentale :
+
+```text
+depth 1 :
+    previous_best = None
+    meilleur_coup retourne e2e4
+    best_move devient Some(e2e4)
+
+depth 2 :
+    previous_best = Some(e2e4)
+    meilleur_coup essaie e2e4 en premier
+    meilleur_coup retourne d2d4
+    best_move devient Some(d2d4)
+
+depth 3 :
+    previous_best = Some(d2d4)
+    meilleur_coup essaie d2d4 en premier
+```
+
+Donc `previous_best` ne sort pas de nulle part : il vient de la variable `best_move` de `meilleur_coup_iterative`.
+
+## Changement 2 : modifier la signature de `meilleur_coup`
+
+Où le faire :
+
+```text
+src/eval.rs, signature de meilleur_coup.
+```
+
+Tu as une fonction de ce style :
+
+```rust
+pub fn meilleur_coup(
+    board: &mut CBoard,
+    tables: &AttackTables,
+    depth: u32,
+    tt: &mut TranspositionTable,
+    limits: &SearchLimits,
+) -> Option<Move>
+```
+
+Ajoute le parametre a la fin :
+
+```rust
+pub fn meilleur_coup(
+    board: &mut CBoard,
+    tables: &AttackTables,
+    depth: u32,
+    tt: &mut TranspositionTable,
+    limits: &SearchLimits,
+    previous_best: Option<Move>,
+) -> Option<Move>
+```
+
+Important : si tu as deja ajoute un parametre appele `tt_best`, renomme-le.
+
+Mauvais :
+
+```rust
+pub fn meilleur_coup(..., tt_best: Option<Move>) -> Option<Move>
+```
+
+Pourquoi c'est mauvais ?
+
+Parce qu'a l'interieur de `meilleur_coup`, tu as aussi besoin de calculer :
+
+```rust
+let tt_best = tt.get(&key).and_then(|entry| entry.best_move);
+```
+
+Donc si le parametre s'appelle deja `tt_best`, tu melanges deux choses :
+
+```text
+le meilleur coup de la profondeur precedente
+le meilleur coup lu dans la table de transposition
+```
+
+Le bon nom du parametre est :
+
+```rust
+previous_best
+```
+
+## Changement 3 : ajouter une fonction de score root
+
+Où le faire :
+
+```text
+src/eval.rs, pres de score_ordre_coup_avec_tt.
+```
+
+Ajoute une fonction separee pour les coups de la racine :
+
+```rust
+fn score_root_move(
+    mv: &Move,
+    previous_best: Option<Move>,
+    tt_best: Option<Move>,
+) -> i32 {
     if Some(*mv) == previous_best {
         return 2_000_000;
     }
@@ -356,10 +538,163 @@ fn score_root_move(mv: &Move, previous_best: Option<Move>, tt_best: Option<Move>
 }
 ```
 
-Et :
+Pourquoi une fonction speciale pour le root ?
+
+Parce que le root a une information supplementaire :
+
+```text
+previous_best
+```
+
+Les noeuds internes de la recherche n'ont pas directement cette information. Ils utilisent surtout :
+
+```text
+tt_best
+MVV-LVA
+killer moves plus tard
+history plus tard
+```
+
+## Changement 4 : utiliser `previous_best` dans `meilleur_coup`
+
+Où le faire :
+
+```text
+src/eval.rs, dans meilleur_coup, juste apres generate_legal_move.
+```
+
+Tu as actuellement l'idee :
 
 ```rust
-coups.sort_by_key(|mv| Reverse(score_root_move(mv, previous_best, tt_best)));
+let mut coups = generate_legal_move(board, tables);
+
+let key = cle_position(board);
+let tt_best = tt.get(&key).and_then(|entry| entry.best_move);
+coups.sort_by_key(|mv| Reverse(score_ordre_coup_avec_tt(mv, tt_best)));
+```
+
+Remplace le tri par :
+
+```rust
+let mut coups = generate_legal_move(board, tables);
+
+let key = cle_position(board);
+let tt_best = tt.get(&key).and_then(|entry| entry.best_move);
+
+coups.sort_by_key(|mv| {
+    Reverse(score_root_move(mv, previous_best, tt_best))
+});
+```
+
+Ici :
+
+```text
+previous_best vient de meilleur_coup_iterative
+tt_best vient de la table de transposition
+```
+
+Donc le tri donne la priorite :
+
+```text
+1. meilleur coup de la profondeur precedente
+2. meilleur coup stocke dans la TT pour la position racine
+3. score normal du coup, captures/promotions/etc.
+```
+
+## Changement 5 : ne pas changer tout de suite `evaluation_negamax_alpha_beta`
+
+Dans ta recherche profonde, tu as deja :
+
+```rust
+let key = cle_position(board);
+let tt_best = tt.get(&key).and_then(|entry| entry.best_move);
+moves.sort_by_key(|mv| Reverse(score_ordre_coup_avec_tt(mv, tt_best)));
+```
+
+Tu peux garder ca au debut.
+
+Pourquoi ?
+
+Parce que `previous_best` concerne surtout la racine entre deux profondeurs :
+
+```text
+depth 5 root best move -> depth 6 root first move
+```
+
+Pour les noeuds internes, c'est la TT qui donne deja le meilleur coup connu pour cette position.
+
+Plus tard, quand tu ajouteras killer moves et history heuristic, tu remplaceras :
+
+```rust
+score_ordre_coup_avec_tt(mv, tt_best)
+```
+
+par une fonction plus complete :
+
+```rust
+score_search_move(mv, tt_best, heuristics, ply)
+```
+
+Mais pour ce chapitre, ne melange pas encore tout.
+
+## Version finale attendue, mentalement
+
+Le chemin des donnees doit etre :
+
+```text
+meilleur_coup_iterative
+    possede best_move
+
+meilleur_coup_iterative appelle meilleur_coup(..., previous_best = best_move)
+
+meilleur_coup
+    recoit previous_best
+    calcule aussi tt_best depuis la table
+    trie les coups avec score_root_move(previous_best, tt_best)
+
+evaluation_negamax_alpha_beta
+    continue a utiliser tt_best depuis la table
+```
+
+Le point important :
+
+```text
+previous_best n'est pas une nouvelle information magique.
+C'est l'ancien best_move de la boucle iterative.
+```
+
+## Erreur classique dans ton cas
+
+Si tu ecris :
+
+```rust
+pub fn meilleur_coup(
+    ...,
+    tt_best: Option<Move>,
+) -> Option<Move> {
+    let key = cle_position(board);
+    let tt_best = tt.get(&key).and_then(|entry| entry.best_move);
+}
+```
+
+alors tu ecrases le parametre.
+
+Le `tt_best` passe en parametre disparait, parce que le `let tt_best = ...` local le remplace.
+
+Il faut ecrire :
+
+```rust
+pub fn meilleur_coup(
+    ...,
+    previous_best: Option<Move>,
+) -> Option<Move> {
+    let key = cle_position(board);
+    let tt_best = tt.get(&key).and_then(|entry| entry.best_move);
+
+    coups.sort_by_key(|mv| {
+        Reverse(score_root_move(mv, previous_best, tt_best))
+    });
+}
 ```
 
 ## Pourquoi `previous_best` avant `tt_best` ?
@@ -367,6 +702,22 @@ coups.sort_by_key(|mv| Reverse(score_root_move(mv, previous_best, tt_best)));
 Parce que `previous_best` est le meilleur coup de la racine a la profondeur precedente.
 
 Il est tres souvent meilleur que les autres pour commencer la profondeur suivante.
+
+`tt_best` est aussi utile, mais il peut venir d'une entree moins adaptee :
+
+```text
+ancienne profondeur
+position stockee avec une borne
+best_move utile mais pas forcement le meilleur root actuel
+```
+
+Donc au root :
+
+```text
+previous_best prioritaire
+tt_best ensuite
+score normal ensuite
+```
 
 ## Ce que ca change
 

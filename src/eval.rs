@@ -228,7 +228,7 @@ pub fn meilleur_coup_iterative(
         if limits.should_stop() {
             break;
         }
-        let mv = meilleur_coup(board, tables, depth, &mut tt, &limits);
+        let mv = meilleur_coup(board, tables, depth, &mut tt, &limits,best_move);
 
         if !limits.should_stop() && mv.is_some() {
             best_move = mv;
@@ -333,13 +333,22 @@ pub fn evaluation_negamax_alpha_beta(
     );
     meilleure
 }
-
+fn score_root_move(mv: &Move, previous_best : Option<Move>,tt_best : Option<Move>) ->i32{
+    if Some(*mv) == previous_best{
+        return 2_000_000;
+    }
+    if Some(*mv) == tt_best{
+        return 1_000_000;
+    }
+    score_ordre_coup(mv)
+}
 pub fn meilleur_coup(
     board: &mut CBoard,
     tables: &AttackTables,
     depth: u32,
     tt: &mut TranspositionTable,
     limits: &SearchLimits,
+    previous_best : Option<Move>,
 ) -> Option<Move> {
     let mut stats = SearchStats::default();
     let start = Instant::now();
@@ -348,7 +357,7 @@ pub fn meilleur_coup(
 
     let key = cle_position(board);
     let tt_best = tt.get(&key).and_then(|entry| entry.best_move);
-    coups.sort_by_key(|mv| Reverse(score_ordre_coup_avec_tt(mv, tt_best)));
+    coups.sort_by_key(|mv| Reverse(score_root_move(mv,previous_best, tt_best)));
     let mut meilleur_mv = None;
     let mut meilleur_score = -INF;
     let mut alpha = -INF;
