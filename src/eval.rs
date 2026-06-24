@@ -7,7 +7,7 @@
     use crate::fen::board_from_fen;
     use crate::position_key::{TranspositionTable,cle_position,TTFlag,TTEntry};
     use std::cmp::Reverse;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
     const SCORE_MAT : i32 = 100_000;
     const INF : i32 = 1_000_000;
     const BONUS_CAVALIER: [i32; 64]= [
@@ -22,16 +22,31 @@
     ];
 
 
-     const BONUS_PION: [i32; 64]= [
-        100, 100, 100, 100, 100, 100, 100, 100,
-        80, 80,   80,   80,   80,   80, 80, 80,
-        40,   05,  45,  45,  45,  45,   40, 40,
-        15,   15,  15,  20,  20,  20,   15, 15,
-        10,   10,  20,  20,  20,  20,   10, 10,
-        5,   5,  10,  15,  15,  10,   5, 5,
-        0,0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0,
-    ];
+    const BONUS_PION: [i32; 64] = [
+    // rangée 1
+     0,  0,  0,  0,  0,  0,  0,  0,
+
+    // rangée 2
+     5,  5, 10, 15, 15, 10,  5,  5,
+
+    // rangée 3
+     5, 10, 15, 20, 20, 15, 10,  5,
+
+    // rangée 4
+     0,  5, 15, 30, 30, 15,  5,  0,
+
+    // rangée 5
+     0,  5, 15, 35, 35, 15,  5,  0,
+
+    // rangée 6
+     5, 10, 20, 30, 30, 20, 10,  5,
+
+    // rangée 7
+    40, 40, 40, 40, 40, 40, 40, 40,
+
+    // rangée 8
+     0,  0,  0,  0,  0,  0,  0,  0,
+];
 
     #[derive(Default, Debug, Clone)]
     pub struct SearchStats{
@@ -39,6 +54,16 @@
         pub qnodes: u64,
         pub cutoffs: u64,
         pub qcutoffs: u64,
+    }
+
+    pub struct SearchLimits{
+        pub start: Instant,
+        pub max_time: Duration,
+    }
+    impl SearchLimits{
+        pub fn should_stop(&self)->bool{
+            self.start.elapsed() >= self.max_time
+        }
     }
     fn valeur_piece_abs(piece: Pieces) ->i32{
         match piece{
@@ -140,12 +165,21 @@
     pub fn meilleur_coup_iterative(board: &mut CBoard,tables : &AttackTables,max_depth: u32)-> Option<Move>{
         let mut best_move = None;
         let mut tt = TranspositionTable::new();
-
+        let limits = SearchLimits {
+            start: Instant::now(),
+            max_time: Duration::from_millis(2000),
+        };
+       
         for depth in 1..=max_depth{
+            if limits.should_stop() {
+                break;
+            }
             let mv = meilleur_coup(board,tables,depth,&mut tt);
-            if mv.is_some(){
+             
+            if !limits.should_stop() && mv.is_some(){
                 best_move = mv;
             }
+
             println!("deph {} -> {:?}",depth,best_move);
         }
         best_move
@@ -154,6 +188,13 @@
 
     pub fn evaluation_negamax_alpha_beta(board: &mut CBoard, tables: &AttackTables, depth:u32 ,mut alpha : i32 ,beta : i32,stats: &mut SearchStats,tt : &mut TranspositionTable)->i32{
         stats.nodes +=1;
+        let limits = SearchLimits {
+            start: Instant::now(),
+            max_time: Duration::from_millis(2000),
+        };
+        if limits.should_stop() {
+            return evaluation_negamax(board);
+        }
         let original_alpha = alpha;
         let key = cle_position(board);
         let mut meilleure = -INF;
