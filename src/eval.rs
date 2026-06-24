@@ -6,8 +6,12 @@ use crate::legal_move::{generate_legal_move, generate_tactical_legal_move};
 use crate::legality::is_king_in_check;
 use crate::make_move::{make_move, unmake_move};
 use crate::position_key::{TTEntry, TTFlag, TranspositionTable, cle_position};
+
+use rayon::prelude::*;
 use std::cmp::Reverse;
 use std::time::{Duration, Instant};
+
+
 const SCORE_MAT: i32 = 100_000;
 const INF: i32 = 1_000_000;
 const BONUS_CAVALIER: [i32; 64] = [
@@ -21,6 +25,8 @@ const BONUS_PION: [i32; 64] = [
     30, 15, 5, 0, 0, 5, 15, 35, 35, 15, 5, 0, 5, 10, 20, 30, 30, 20, 10, 5, 40, 40, 40, 40, 40, 40,
     40, 40, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
+
+
 
 #[derive(Default, Debug, Clone)]
 pub struct SearchStats {
@@ -150,7 +156,58 @@ pub fn evaluation_min_max(board: &mut CBoard, tables: &AttackTables, depth: u32)
     }
     meilleure
 }
+pub fn meilleur_coup_iterative_parallel(
+    board: &mut CBoard,
+    tables: &AttackTables,
+    max_depth: u32,
+) -> Option<Move> {
+    let mut best_move = None;
+    let start = Instant::now();
 
+    for depth in 1..=max_depth {
+        if start.elapsed() >= Duration::from_millis(100000){
+            break;
+        }
+        let best_at_depth = meilleur_coup_parallel_depth(board,tables,depth,start);
+        if start.elapsed() < Duration::from_millis(100000){
+            best_move = best_at_depth;
+        }
+        println!("deph {} -> {:?}", depth, best_move);
+
+    }
+    best_move
+}
+
+pub fn meilleur_coup_parallel_depth(board : &mut CBoard,tables : &AttackTables,depth : u32,start : Instant)-> Option<Move>{
+    let coups = generate_legal_move(board,tables);
+    let board_depart = *board;
+
+    coups.par_iter().copied().map(|mv| {
+        let mut board_local = board_depart;
+        let mut stats = SearchStats::default();
+        let mut tt = TranspositionTable::new();
+
+        let limits = SearchLimits{
+            start,
+            max_time : Duration::from_millis(100000),
+        };
+
+        make_move(&mut board_local,mv);
+        let score = -evaluation_negamax_alpha_beta(
+            &mut board_local,
+            tables,
+            depth - 1,
+            -INF,
+            INF,
+            &mut stats,
+            &mut tt,
+            &limits,
+        );
+        (mv,score)
+
+
+    }).max_by_key(|(_, score)| *score).map(|(mv, _)| mv)
+}
 pub fn meilleur_coup_iterative(
     board: &mut CBoard,
     tables: &AttackTables,
@@ -320,12 +377,12 @@ pub fn meilleur_coup(
         alpha = alpha.max(score);
     }
 
-    let elapsed = start.elapsed();
+    let elapsed = start.elapsed();/*
     println!("Temps : {}", elapsed.as_millis());
     println!("Nodes : {}", stats.nodes);
     println!("QNodes : {}", stats.qnodes);
     println!("Cutoffs : {}", stats.cutoffs);
-    println!("QCutoffs : {}", stats.qcutoffs);
+    println!("QCutoffs : {}", stats.qcutoffs);*/
     meilleur_mv
 }
 
