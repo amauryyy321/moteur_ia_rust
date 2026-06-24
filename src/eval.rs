@@ -1,10 +1,11 @@
     use crate::attack_tables::AttackTables;
     use crate::board::{CBoard, Color, Pieces};
     use crate::chess_move::{Move,MoveFlag};
-    use crate::legal_move::generate_legal_move;
+    use crate::legal_move::{generate_legal_move,generate_tactical_legal_move};
     use crate::legality::is_king_in_check;
     use crate::make_move::make_move;
     use crate::fen::board_from_fen;
+    use crate::position_key::{TranspositionTable,cle_position,TTFlag,TTEntry};
     use std::cmp::Reverse;
     use std::time::Instant;
     const SCORE_MAT : i32 = 100_000;
@@ -75,7 +76,12 @@
             Color::Noir => -score,
         }
     }
-
+    fn score_ordre_coup_avec_tt(mv: &Move, tt_best: Option<Move>)->i32{
+        if Some(*mv) == tt_best {
+            return 1_000_000;
+        }
+        score_ordre_coup(mv)
+    }
     pub fn score_ordre_coup(mv: &Move) -> i32{
         
         match mv.flag {
@@ -132,14 +138,41 @@
     }
 
 
-    pub fn evaluation_negamax_alpha_beta(board: &mut CBoard, tables: &AttackTables, depth:u32 ,mut alpha : i32 ,beta : i32,stats: &mut SearchStats)->i32{
+    pub fn evaluation_negamax_alpha_beta(board: &mut CBoard, tables: &AttackTables, depth:u32 ,mut alpha : i32 ,beta : i32,stats: &mut SearchStats,tt : &mut TranspositionTable)->i32{
         stats.nodes +=1;
+        let original_alpha = alpha;
+        let key = cle_position(board);
+        let mut meilleure = -INF;
+        let mut meilleur_mv = None;
+
+
+        if let Some(entry) = tt.get(&key) {
+            if entry.depth >= depth{
+                match entry.flag {
+                    TTFlag::Exact => return entry.score,
+                    TTFlag::LowerBound => alpha = alpha.max(entry.score),
+                    TTFlag::UpperBound =>{
+                        if entry.score <= alpha {
+                            return entry.score;
+                        }
+                    }
+                }
+            }
+            if alpha >= beta {
+                return entry.score;
+            }
+        }
+
+
+
         if depth == 0{
-            return quiescence(board,tables,alpha,beta,2, stats);
+            return quiescence(board,tables,alpha,beta,0, stats);
         }
 
         let mut moves = generate_legal_move(board, tables);
-        moves.sort_by_key(|mv| -score_ordre_coup(mv));
+        let tt_best = tt.get(&key).and_then(|entry| entry.best_move);
+        moves.sort_by_key(|mv| Reverse(score_ordre_coup_avec_tt(mv, tt_best)));
+
 
 
         if moves.is_empty(){
@@ -148,23 +181,31 @@
             }
             return 0;
         }
-        let mut meilleure = - 10000;
 
 
         for coups in moves{
             let old_board = board.clone();
             make_move(board,coups );
-            let score = -evaluation_negamax_alpha_beta(board,tables,depth - 1,-beta,-alpha,stats);
+            let score = -evaluation_negamax_alpha_beta(board,tables,depth - 1,-beta,-alpha,stats,tt);
             *board = old_board;
-            meilleure = meilleure.max(score);
+            if score >meilleure{
+                meilleure = meilleure.max(score);
+                meilleur_mv = Some(coups);
+            }
+            
             alpha = alpha.max(score);
+
             if alpha >= beta {
+                stats.cutoffs+=1;
                 break;
             }
+
     
             
 
         }
+        let flag = if  meilleure <= original_alpha{TTFlag::UpperBound}else if meilleure >= beta {TTFlag::LowerBound}else {TTFlag::Exact};
+        tt.insert(key,TTEntry{depth,score : meilleure,flag,best_move:meilleur_mv});
         meilleure
     }
 
@@ -174,6 +215,8 @@
 
         let mut stats = SearchStats::default();
         let start = Instant::now();
+        let mut tt= TranspositionTable::new();
+
 
         let mut coups = generate_legal_move(board, tables);
         coups.sort_by_key(|mv| -score_ordre_coup(mv));
@@ -188,7 +231,7 @@
         for mv in coups {
             let old_board = board.clone();
             make_move(board,mv);
-            let score = -evaluation_negamax_alpha_beta(board,tables,depth -1,-beta,-alpha,&mut stats);
+            let score = -evaluation_negamax_alpha_beta(board,tables,depth -1,-beta,-alpha,&mut stats,&mut tt);
             *board = old_board;
 
             if score > meilleur_score{
@@ -201,6 +244,7 @@
 
 
         }
+        
         let elapsed = start.elapsed();
         println!("Temps : {}",elapsed.as_millis());
         println!("Nodes : {}",stats.nodes);
@@ -330,12 +374,8 @@
             }
         }
 
-        let mut moves = generate_legal_move(board,tables);
-        if !in_check {
-        moves.retain(|mv|{
-            mv.flag== MoveFlag::Capture || mv.flag == MoveFlag::EnPassant || mv.flag == MoveFlag::PromotionCapture
-        });
-        }
+        let mut moves = generate_tactical_legal_move(board,tables);
+        
 
         if moves.is_empty(){
             if in_check{
@@ -363,13 +403,7 @@
         }
         alpha
     }
-    fn is_tactical_move(mv : &Move)-> bool{
-        matches!(
-            mv.flag,
-            MoveFlag::Capture | MoveFlag::EnPassant | MoveFlag::Promotion | MoveFlag::PromotionCapture
-        )
-
-    }
+    
 
     #[test]
     fn paire_de_fous_donne_bonus_aux_blancs() {

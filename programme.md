@@ -849,7 +849,7 @@ pub fn quiescence(
             return beta;
         }
 
-        if score > alpha {
+        if score > alpha {_o
             alpha = score;
         }
     }
@@ -1463,7 +1463,7 @@ fn evaluation_cavaliers(board: &CBoard) -> i32 {
     let mut cavaliers_noirs = board.piece_bb[Pieces::CavalierNoir as usize];
 
     while let Some(square) = pop_lsb(&mut cavaliers_noirs) {
-        let mirrored = mirror_square(square);
+        let mirrored = mirror_square(square);_=> 0
         score -= BONUS_CAVALIER[mirrored as usize];
     }
 

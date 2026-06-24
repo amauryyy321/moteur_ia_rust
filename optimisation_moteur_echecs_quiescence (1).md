@@ -52,6 +52,40 @@ puis plus tard :
 profondeur 8+ avec table de transposition + iterative deepening
 ```
 
+## Repères dans ton projet
+
+Dans ce document, quand je dis d'ajouter ou de remplacer du code, voici les fichiers à viser dans ton projet actuel :
+
+```text
+src/eval.rs
+```
+
+Pour la recherche IA : `SearchStats`, `evaluation_negamax_alpha_beta`, `meilleur_coup`, `quiescence`, `score_ordre_coup`, `SearchLimits`, killer moves et history heuristic.
+
+```text
+src/legal_move.rs
+```
+
+Pour la génération de coups : `is_tactical_move`, `generate_legal_move`, `generate_tactical_legal_move`.
+
+```text
+src/position_key.rs
+```
+
+Pour la table de transposition : `ClePosition`, `TTFlag`, `TTEntry`, `TranspositionTable`.
+
+```text
+src/make_move.rs
+```
+
+Pour la future optimisation `make_move` / `unmake_move`.
+
+```text
+src/web_server.rs
+```
+
+Seulement si tu veux changer la profondeur jouée par l'IA web ou remplacer `meilleur_coup` par une version iterative deepening.
+
 ---
 
 # 1. Priorité absolue : vérifier que tu lances en release
@@ -80,6 +114,14 @@ Le mode debug Rust peut être énormément plus lent sur un moteur d'échecs, pa
 
 Tu peux aussi ajouter dans `Cargo.toml` :
 
+Où le mettre :
+
+```text
+Cargo.toml, à la racine du projet, tout en bas du fichier.
+```
+
+Si un bloc `[profile.release]` existe déjà, ne le duplique pas : complète le bloc existant.
+
 ```toml
 [profile.release]
 opt-level = 3
@@ -98,6 +140,12 @@ Il ne faut pas optimiser à l'aveugle. Tu dois savoir combien de nœuds ton mote
 
 Ajoute une structure de statistiques :
 
+Où le mettre :
+
+```text
+src/eval.rs, près du début du fichier, juste après les constantes comme SCORE_MAT et INF.
+```
+
 ```rust
 #[derive(Default, Debug, Clone)]
 pub struct SearchStats {
@@ -109,6 +157,14 @@ pub struct SearchStats {
 ```
 
 Puis modifie progressivement tes fonctions pour recevoir :
+
+Où le mettre :
+
+```text
+src/eval.rs, dans la signature de evaluation_negamax_alpha_beta puis dans la signature de quiescence.
+```
+
+Chaque fonction qui appelle `evaluation_negamax_alpha_beta` ou `quiescence` devra ensuite transmettre `stats`.
 
 ```rust
 stats: &mut SearchStats
@@ -154,14 +210,45 @@ pub fn quiescence(
 
 Dans `meilleur_coup`, mesure le temps :
 
+Où le mettre :
+
+```text
+src/eval.rs, dans la fonction meilleur_coup.
+```
+
+Place `let mut stats = SearchStats::default();` et `let start = Instant::now();` au début de `meilleur_coup`, avant la génération des coups.
+
+Place les `println!` à la fin de `meilleur_coup`, juste avant `meilleur_mv`.
+
+L'import suivant se met tout en haut de `src/eval.rs`, avec les autres `use` :
+
 ```rust
 use std::time::Instant;
+```
 
+Code à ajouter dans `meilleur_coup` :
+
+```rust
 let mut stats = SearchStats::default();
 let start = Instant::now();
+```
 
-let mv = meilleur_coup(&mut board, &tables, depth, &mut stats);
+Puis, dans la boucle de `meilleur_coup`, passe `&mut stats` à l'appel alpha-beta :
 
+```rust
+let score = -evaluation_negamax_alpha_beta(
+    board,
+    tables,
+    depth - 1,
+    -beta,
+    -alpha,
+    &mut stats,
+);
+```
+
+Enfin, juste avant le `return meilleur_mv` ou la dernière ligne `meilleur_mv` :
+
+```rust
 let elapsed = start.elapsed();
 println!("Temps: {} ms", elapsed.as_millis());
 println!("Nodes: {}", stats.nodes);
@@ -184,14 +271,28 @@ C'est probablement ton cas actuellement.
 
 Dans ton code actuel, tu appelles :
 
+Où modifier :
+
+```text
+src/eval.rs, dans evaluation_negamax_alpha_beta, dans le bloc if depth == 0.
+```
+
 ```rust
 return quiescence(board, tables, alpha, beta, 4);
 ```
 
 Pour stabiliser, commence avec :
 
+Au même endroit, remplace seulement le dernier argument de profondeur de quiescence :
+
 ```rust
 return quiescence(board, tables, alpha, beta, 2);
+```
+
+Si tu as déjà ajouté `SearchStats`, l'appel aura probablement un argument en plus. Dans ce cas, tu changes seulement `4` en `2` :
+
+```rust
+return quiescence(board, tables, alpha, beta, 2, stats);
 ```
 
 Pourquoi ?
@@ -235,6 +336,20 @@ C'est correct seulement si le roi du joueur au trait n'est pas en échec.
 Si le joueur au trait est en échec, il n'a pas le droit de faire “rien”. Il doit sortir de l'échec.
 
 Version plus correcte :
+
+Où le mettre :
+
+```text
+src/eval.rs, remplace entièrement la fonction quiescence existante par cette version.
+```
+
+Imports nécessaires en haut de `src/eval.rs`, avec les autres `use`, si tu ne les as pas déjà :
+
+```rust
+use std::cmp::Reverse;
+use crate::legality::is_king_in_check;
+use crate::legal_move::generate_legal_move;
+```
 
 ```rust
 pub fn quiescence(
@@ -305,6 +420,14 @@ pub fn quiescence(
 
 Et ajoute :
 
+Où le mettre :
+
+```text
+src/eval.rs, juste au-dessus de la fonction quiescence si tu fais seulement cette étape.
+```
+
+Si tu appliques ensuite l'étape 5, mets plutôt ce helper dans `src/legal_move.rs`, juste au-dessus de `generate_tactical_legal_move`, et rends-le public avec `pub fn`, car il servira aussi au générateur tactique.
+
 ```rust
 fn is_tactical_move(mv: &Move) -> bool {
     matches!(
@@ -341,7 +464,7 @@ C'est très coûteux.
 Ce qu'il faut faire à terme :
 
 ```rust
-generate_tactical_legal_moves(...)
+generate_tactical_legal_move(...)
 ```
 
 Cette fonction doit générer seulement :
@@ -354,8 +477,22 @@ en passant
 
 Première version simple si tu as accès à `generate_pseudo_legal_move` :
 
+Où le mettre :
+
+```text
+src/legal_move.rs, après is_tactical_move et avant generate_legal_move.
+```
+
+Imports nécessaires en haut de `src/legal_move.rs`, si absents :
+
 ```rust
-pub fn generate_tactical_legal_moves(
+use crate::pseudo_legal_move::generate_pseudo_legal_move;
+use crate::make_move::make_move;
+use crate::legality::is_king_in_check;
+```
+
+```rust
+pub fn generate_tactical_legal_move(
     board: &mut CBoard,
     tables: &AttackTables,
 ) -> Vec<Move> {
@@ -384,17 +521,37 @@ pub fn generate_tactical_legal_moves(
 
 Puis dans `quiescence` :
 
+Où modifier :
+
+```text
+src/eval.rs, dans quiescence, à l'endroit où tu construis let mut moves.
+```
+
+Ajoute aussi l'import en haut de `src/eval.rs` :
+
+```rust
+use crate::legal_move::{generate_legal_move, generate_tactical_legal_move};
+```
+
 ```rust
 let mut moves = if in_check {
     generate_legal_move(board, tables)
 } else {
-    generate_tactical_legal_moves(board, tables)
+    generate_tactical_legal_move(board, tables)
 };
 ```
 
 Même cette version est déjà meilleure que générer tous les coups légaux puis filtrer, parce que tu évites une partie du travail inutile.
 
 Version encore meilleure plus tard : créer directement des fonctions spécialisées :
+
+Où les mettre plus tard :
+
+```text
+src/pseudo_legal_move.rs, près des générateurs par pièce existants.
+```
+
+Puis expose une fonction publique dans `src/legal_move.rs` qui les appelle et vérifie la légalité des coups, comme `generate_tactical_legal_move`.
 
 ```rust
 generate_pawn_captures(...)
@@ -431,6 +588,12 @@ Mais tu peux commencer avec une approximation simple.
 
 Ajoute :
 
+Où le mettre :
+
+```text
+src/eval.rs, dans la zone des petites fonctions helper, par exemple juste après valeur_piece_abs et avant score_ordre_coup.
+```
+
 ```rust
 fn capture_probablement_mauvaise(mv: &Move) -> bool {
     if !matches!(mv.flag, MoveFlag::Capture | MoveFlag::EnPassant | MoveFlag::PromotionCapture) {
@@ -449,6 +612,12 @@ fn capture_probablement_mauvaise(mv: &Move) -> bool {
 ```
 
 Puis dans la quiescence, seulement hors échec :
+
+Où le mettre :
+
+```text
+src/eval.rs, dans quiescence, au tout début de la boucle for mv in moves, avant let old_board = board.clone().
+```
 
 ```rust
 if !in_check && capture_probablement_mauvaise(&mv) {
@@ -475,6 +644,12 @@ alors inutile d'analyser cette capture.
 
 Exemple simple :
 
+Où le mettre :
+
+```text
+src/eval.rs, près des autres helpers d'évaluation, juste après capture_probablement_mauvaise.
+```
+
 ```rust
 fn valeur_capture_mv(mv: &Move) -> i32 {
     match mv.captured {
@@ -485,6 +660,14 @@ fn valeur_capture_mv(mv: &Move) -> i32 {
 ```
 
 Dans quiescence :
+
+Où modifier :
+
+```text
+src/eval.rs, dans quiescence.
+```
+
+Pour que le code compile facilement, garde `stand_pat` visible dans toute la fonction : déclare-le avant le bloc `if !in_check`, puis utilise-le dans ce bloc et dans la boucle.
 
 ```rust
 let stand_pat = evaluation_negamax(board);
@@ -510,6 +693,14 @@ le coup donne mat potentiellement immédiat
 
 Version prudente :
 
+Où le mettre :
+
+```text
+src/eval.rs, dans quiescence, dans la boucle for mv in moves, avant let old_board = board.clone().
+```
+
+Si tu as aussi ajouté `capture_probablement_mauvaise`, mets le delta pruning juste après ce filtre.
+
 ```rust
 if !in_check
     && !matches!(mv.flag, MoveFlag::Promotion | MoveFlag::PromotionCapture)
@@ -530,6 +721,12 @@ Le delta pruning peut réduire fortement les `qnodes`.
 
 Dans ton code, tu as :
 
+Où chercher :
+
+```text
+src/eval.rs, dans evaluation_min_max et/ou evaluation_negamax_alpha_beta.
+```
+
 ```rust
 let mut meilleure = - 10000;
 ```
@@ -548,11 +745,23 @@ const INF: i32 = 1_000_000;
 
 Ensuite, remplace :
 
+Où chercher :
+
+```text
+src/eval.rs, dans evaluation_negamax_alpha_beta et meilleur_coup, juste après generate_legal_move.
+```
+
 ```rust
 moves.sort_by_key(|mv| -score_ordre_coup(mv));
 ```
 
 par :
+
+Ajoute l'import en haut de `src/eval.rs` si besoin :
+
+```rust
+use std::cmp::Reverse;
+```
 
 ```rust
 moves.sort_by_key(|mv| Reverse(score_ordre_coup(mv)));
@@ -587,6 +796,18 @@ Si tu as déjà une `ClePosition` pour la répétition, tu peux l'utiliser tempo
 
 Structure :
 
+Où le mettre :
+
+```text
+src/position_key.rs, après la définition de ClePosition et de la fonction cle_position.
+```
+
+Ajoute aussi cet import en haut de `src/position_key.rs`, parce que `TTEntry` stocke un `Move` :
+
+```rust
+use crate::chess_move::Move;
+```
+
 ```rust
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TTFlag {
@@ -606,6 +827,14 @@ pub struct TTEntry {
 
 Table :
 
+Où le mettre :
+
+```text
+src/position_key.rs, dans le même fichier, juste après TTEntry ou juste avant les structs TT.
+```
+
+Si `HashMap` n'est pas déjà importé, mets l'import en haut de `src/position_key.rs`.
+
 ```rust
 use std::collections::HashMap;
 
@@ -614,19 +843,43 @@ pub type TranspositionTable = HashMap<ClePosition, TTEntry>;
 
 Dans `meilleur_coup`, crée :
 
+Où le mettre :
+
+```text
+src/eval.rs, dans meilleur_coup, au début de la fonction, après SearchStats.
+```
+
 ```rust
 let mut tt = TranspositionTable::new();
 ```
 
-Puis passe `&mut tt` à alpha-beta.
+Puis passe `&mut tt` à alpha-beta. Cela veut dire que la signature de `evaluation_negamax_alpha_beta` dans `src/eval.rs` doit aussi recevoir :
+
+```rust
+tt: &mut TranspositionTable
+```
+
+et que chaque appel récursif à `evaluation_negamax_alpha_beta` doit retransmettre `tt`.
 
 ## 9.2 Utilisation dans alpha-beta
 
-Au début de `negamax_alpha_beta` :
+Au début de `evaluation_negamax_alpha_beta` :
+
+Où le mettre :
+
+```text
+src/eval.rs, dans evaluation_negamax_alpha_beta, juste après stats.nodes += 1.
+```
+
+Imports nécessaires en haut de `src/eval.rs` :
+
+```rust
+use crate::position_key::{cle_position, TranspositionTable, TTEntry, TTFlag};
+```
 
 ```rust
 let alpha_original = alpha;
-let key = ClePosition::from_board(board);
+let key = cle_position(board);
 
 if let Some(entry) = tt.get(&key) {
     if entry.depth >= depth {
@@ -648,6 +901,14 @@ if let Some(entry) = tt.get(&key) {
 ```
 
 Après avoir calculé le meilleur score :
+
+Où le mettre :
+
+```text
+src/eval.rs, dans evaluation_negamax_alpha_beta, après la boucle for mv in moves et juste avant de retourner le meilleur score.
+```
+
+Pendant la boucle, garde aussi une variable `best_move` / `meilleur_mv` pour savoir quel coup stocker.
 
 ```rust
 let flag = if meilleur_score <= alpha_original {
@@ -689,6 +950,12 @@ Donc tu dois le tester en premier.
 
 Exemple :
 
+Où le mettre :
+
+```text
+src/eval.rs, juste après score_ordre_coup.
+```
+
 ```rust
 fn score_ordre_coup_avec_tt(mv: &Move, tt_best: Option<Move>) -> i32 {
     if Some(*mv) == tt_best {
@@ -700,6 +967,14 @@ fn score_ordre_coup_avec_tt(mv: &Move, tt_best: Option<Move>) -> i32 {
 ```
 
 Puis :
+
+Où le mettre :
+
+```text
+src/eval.rs, dans evaluation_negamax_alpha_beta, après let mut moves = generate_legal_move(...) et avant moves.sort_by_key(...).
+```
+
+La variable `key` doit être celle calculée au début de `evaluation_negamax_alpha_beta` avec `cle_position(board)`.
 
 ```rust
 let tt_best = tt.get(&key).and_then(|entry| entry.best_move);
@@ -740,6 +1015,12 @@ la table de transposition aide la profondeur suivante
 
 Structure simple :
 
+Où le mettre :
+
+```text
+src/eval.rs, juste après meilleur_coup, ou juste avant meilleur_coup si tu préfères que meilleur_coup appelle cette version.
+```
+
 ```rust
 pub fn meilleur_coup_iterative(
     board: &mut CBoard,
@@ -763,7 +1044,21 @@ pub fn meilleur_coup_iterative(
 }
 ```
 
+Le snippet utilise `meilleur_coup_avec_tt`. Tu peux le créer dans `src/eval.rs` juste à côté de `meilleur_coup`, ou adapter ton `meilleur_coup` actuel pour recevoir `tt: &mut TranspositionTable`.
+
 Plus tard, ajoute une limite de temps.
+
+Pour l'utiliser dans l'interface web :
+
+```text
+src/web_server.rs, dans jouer_coup_ia, remplace l'appel à meilleur_coup par meilleur_coup_iterative.
+```
+
+Pense aussi à adapter l'import en haut de `src/web_server.rs` :
+
+```rust
+use crate::eval::meilleur_coup_iterative;
+```
 
 ---
 
@@ -783,9 +1078,21 @@ l'IA doit absolument atteindre profondeur 6
 
 Version simple :
 
+Où le mettre :
+
+```text
+src/eval.rs, près de SearchStats, au début du fichier.
+```
+
+Remplace l'import `Instant` par celui-ci si tu utilises déjà le chronométrage :
+
 ```rust
 use std::time::{Duration, Instant};
+```
 
+Puis ajoute la structure :
+
+```rust
 pub struct SearchLimits {
     pub start: Instant,
     pub max_time: Duration,
@@ -800,6 +1107,14 @@ impl SearchLimits {
 
 Dans la recherche :
 
+Où le mettre :
+
+```text
+src/eval.rs, au début de evaluation_negamax_alpha_beta, juste après stats.nodes += 1.
+```
+
+La signature de `evaluation_negamax_alpha_beta` doit alors recevoir `limits: &SearchLimits`, et les appels récursifs doivent retransmettre `limits`.
+
 ```rust
 if limits.should_stop() {
     return evaluation_negamax(board);
@@ -807,6 +1122,12 @@ if limits.should_stop() {
 ```
 
 Et avec iterative deepening :
+
+Où le mettre :
+
+```text
+src/eval.rs, dans meilleur_coup_iterative, dans la boucle for depth in 1..=max_depth.
+```
 
 ```rust
 for depth in 1..=max_depth {
@@ -843,6 +1164,14 @@ Mais à grande profondeur, ce coût devient réel.
 
 Optimisation future : transformer `make_move` en :
 
+Où le faire :
+
+```text
+src/make_move.rs, en ajoutant une nouvelle fonction qui retourne UndoMove, puis une fonction unmake_move.
+```
+
+Ne remplace pas brutalement tous les `board.clone()` au début : commence par créer l'API dans `src/make_move.rs`, puis adapte seulement la recherche quand les tests passent.
+
 ```rust
 let undo = make_move(board, mv);
 // search
@@ -850,6 +1179,12 @@ unmake_move(board, mv, undo);
 ```
 
 Avec une structure :
+
+Où le mettre :
+
+```text
+src/make_move.rs, près de make_move, avant ou après la fonction.
+```
 
 ```rust
 pub struct UndoMove {
@@ -864,6 +1199,14 @@ pub struct UndoMove {
 ```
 
 Ne fais pas ça en premier.
+
+Quand l'API `unmake_move` sera prête, les remplacements se feront principalement ici :
+
+```text
+src/eval.rs, dans les boucles de evaluation_min_max, evaluation_negamax_alpha_beta, meilleur_coup et quiescence.
+src/legal_move.rs, dans generate_legal_move et generate_tactical_legal_move.
+src/perft.rs, dans perft si tu veux aussi optimiser les tests de performance.
+```
 
 Ordre recommandé :
 
@@ -894,6 +1237,12 @@ il peut être intéressant de le tester tôt dans une autre branche de même pro
 
 Structure simple :
 
+Où le mettre :
+
+```text
+src/eval.rs, près de SearchStats, au début du fichier.
+```
+
 ```rust
 pub struct KillerMoves {
     pub killers: [[Option<Move>; 2]; 128],
@@ -901,6 +1250,14 @@ pub struct KillerMoves {
 ```
 
 Quand tu as une coupure beta sur un coup non-capture :
+
+Où le mettre :
+
+```text
+src/eval.rs, dans evaluation_negamax_alpha_beta, dans la boucle des coups, dans le bloc if score >= beta ou if alpha >= beta.
+```
+
+Pour cela, la signature de `evaluation_negamax_alpha_beta` doit recevoir `ply: u32` et `killers: &mut KillerMoves`.
 
 ```rust
 if score >= beta {
@@ -914,6 +1271,14 @@ if score >= beta {
 ```
 
 Dans le tri des coups :
+
+Où le mettre :
+
+```text
+src/eval.rs, dans une fonction de score de tri, par exemple score_ordre_coup_avec_tt_ou_killer.
+```
+
+Cette fonction doit recevoir `ply: u32` et `killers: &KillerMoves`, puis être utilisée dans le `moves.sort_by_key(...)` de `evaluation_negamax_alpha_beta`.
 
 ```rust
 if Some(*mv) == killers.killers[ply as usize][0] {
@@ -944,6 +1309,12 @@ La history heuristic donne un score aux coups calmes qui ont souvent provoqué d
 
 Version simple :
 
+Où le mettre :
+
+```text
+src/eval.rs, près de SearchStats et KillerMoves.
+```
+
 ```rust
 pub struct HistoryHeuristic {
     pub table: [[i32; 64]; 64],
@@ -952,11 +1323,25 @@ pub struct HistoryHeuristic {
 
 Quand un coup calme coupe :
 
+Où le mettre :
+
+```text
+src/eval.rs, dans evaluation_negamax_alpha_beta, dans le même bloc de coupure beta que les killer moves.
+```
+
+La signature doit recevoir `history: &mut HistoryHeuristic`, et les appels récursifs doivent le retransmettre.
+
 ```rust
 history.table[mv.from as usize][mv.to as usize] += (depth * depth) as i32;
 ```
 
 Dans le tri :
+
+Où le mettre :
+
+```text
+src/eval.rs, dans la fonction de score de tri des coups, après le score TT/killer et avant le score calme par défaut.
+```
 
 ```rust
 let history_score = history.table[mv.from as usize][mv.to as usize];
@@ -976,8 +1361,8 @@ Ne fais pas tout en même temps. Voici l'ordre exact que je te conseille.
 
 ```text
 cargo run --release
-ajouter SearchStats
-mesurer nodes/qnodes/cutoffs/qcutoffs
+ajouter SearchStats dans src/eval.rs
+mesurer nodes/qnodes/cutoffs/qcutoffs dans src/eval.rs, dans meilleur_coup
 ```
 
 Objectif : savoir si le problème vient surtout de la quiescence.
@@ -996,11 +1381,23 @@ par :
 quiescence(..., 2)
 ```
 
+Où :
+
+```text
+src/eval.rs, dans evaluation_negamax_alpha_beta, dans le bloc depth == 0.
+```
+
 Objectif : retrouver un temps acceptable.
 
 ## Étape 3 — Quiescence correcte en cas d'échec
 
 Modifier la quiescence pour ne pas utiliser `stand_pat` si le roi est en échec.
+
+Où :
+
+```text
+src/eval.rs, dans la fonction quiescence.
+```
 
 Objectif : éviter une erreur logique importante.
 
@@ -1009,7 +1406,19 @@ Objectif : éviter une erreur logique importante.
 Créer :
 
 ```rust
-generate_tactical_legal_moves
+generate_tactical_legal_move
+```
+
+Où :
+
+```text
+src/legal_move.rs, après is_tactical_move et avant generate_legal_move.
+```
+
+Puis l'appeler depuis :
+
+```text
+src/eval.rs, dans quiescence, quand le roi n'est pas en échec.
 ```
 
 Objectif : ne plus générer tous les coups légaux à chaque nœud de quiescence.
@@ -1020,11 +1429,23 @@ C'est probablement le plus gros gain immédiat.
 
 Ajouter un delta pruning simple dans la quiescence.
 
+Où :
+
+```text
+src/eval.rs, helper près des fonctions d'évaluation, filtre dans la boucle de quiescence.
+```
+
 Objectif : réduire les branches tactiques inutiles.
 
 ## Étape 6 — Filtre de captures mauvaises
 
 Ajouter un filtre simple avant un vrai SEE.
+
+Où :
+
+```text
+src/eval.rs, helper près des fonctions d'évaluation, filtre dans la boucle de quiescence.
+```
 
 Objectif : éviter de chercher trop de captures absurdes.
 
@@ -1032,11 +1453,25 @@ Objectif : éviter de chercher trop de captures absurdes.
 
 Commencer avec `ClePosition`, puis passer à Zobrist plus tard.
 
+Où :
+
+```text
+src/position_key.rs pour TTFlag, TTEntry et TranspositionTable.
+src/eval.rs pour consulter et remplir la table dans evaluation_negamax_alpha_beta.
+```
+
 Objectif : éviter de recalculer les mêmes positions.
 
 ## Étape 8 — Iterative deepening
 
 Chercher 1, puis 2, puis 3, etc.
+
+Où :
+
+```text
+src/eval.rs, nouvelle fonction meilleur_coup_iterative.
+src/web_server.rs seulement si tu veux que l'IA web utilise cette nouvelle fonction.
+```
 
 Objectif : améliorer l'ordre des coups et préparer la gestion du temps.
 
@@ -1044,17 +1479,36 @@ Objectif : améliorer l'ordre des coups et préparer la gestion du temps.
 
 Tester en premier le meilleur coup connu par la table.
 
+Où :
+
+```text
+src/eval.rs, dans la fonction de score de tri et dans evaluation_negamax_alpha_beta.
+```
+
 Objectif : rendre alpha-beta beaucoup plus efficace.
 
 ## Étape 10 — Killer moves + history heuristic
 
 Optimiser l'ordre des coups calmes.
 
+Où :
+
+```text
+src/eval.rs, structures près de SearchStats, mise à jour dans les coupures beta.
+```
+
 Objectif : réduire encore le nombre de nœuds.
 
 ## Étape 11 — Make/unmake
 
 Remplacer les clones par `make_move` + `unmake_move`.
+
+Où :
+
+```text
+src/make_move.rs pour UndoMove et unmake_move.
+src/eval.rs et src/legal_move.rs pour remplacer progressivement les clones.
+```
 
 Objectif : réduire le coût par nœud.
 
@@ -1065,6 +1519,18 @@ Objectif : réduire le coût par nœud.
 # 17. Version cible simplifiée de ta recherche
 
 À terme, la structure devrait ressembler à ça :
+
+Où le mettre :
+
+```text
+src/eval.rs, cette version sert de modèle pour remplacer evaluation_negamax_alpha_beta.
+```
+
+Elle suppose que `src/eval.rs` importe la table avec :
+
+```rust
+use crate::position_key::{cle_position, TranspositionTable, TTEntry, TTFlag};
+```
 
 ```rust
 pub fn negamax_alpha_beta(
@@ -1084,7 +1550,7 @@ pub fn negamax_alpha_beta(
     }
 
     let alpha_original = alpha;
-    let key = ClePosition::from_board(board);
+    let key = cle_position(board);
 
     let tt_best = if let Some(entry) = tt.get(&key) {
         if entry.depth >= depth {
@@ -1176,7 +1642,7 @@ pub fn negamax_alpha_beta(
 }
 ```
 
-Ce code est un modèle d'architecture, pas forcément un copier-coller direct. Il dépend de tes modules exacts, notamment `ClePosition::from_board` et `generate_pseudo_legal_move`.
+Ce code est un modèle d'architecture, pas forcément un copier-coller direct. Il dépend de tes modules exacts, notamment `cle_position(board)` et `generate_pseudo_legal_move`.
 
 ---
 
@@ -1228,16 +1694,15 @@ Ordre minimal à appliquer :
 
 ```text
 1. cargo run --release
-2. ajouter SearchStats
-3. passer qdepth de 4 à 2
-4. corriger quiescence en cas d'échec
-5. créer generate_tactical_legal_moves
-6. ajouter delta pruning léger
-7. ajouter table de transposition
-8. ajouter iterative deepening
+2. ajouter SearchStats dans src/eval.rs
+3. passer qdepth de 4 à 2 dans src/eval.rs, dans evaluation_negamax_alpha_beta
+4. corriger quiescence dans src/eval.rs
+5. créer generate_tactical_legal_move dans src/legal_move.rs
+6. ajouter delta pruning léger dans src/eval.rs, dans quiescence
+7. ajouter table de transposition dans src/position_key.rs puis l'utiliser dans src/eval.rs
+8. ajouter iterative deepening dans src/eval.rs
 ```
 
 Avec seulement les étapes 1 à 5, tu devrais déjà sentir une nette différence.
 
 Avec les étapes 6 à 8, tu commences à avoir une recherche beaucoup plus sérieuse.
-
