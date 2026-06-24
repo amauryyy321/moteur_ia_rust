@@ -137,6 +137,20 @@
         meilleure
     }
 
+    pub fn meilleur_coup_iterative(board: &mut CBoard,tables : &AttackTables,max_depth: u32)-> Option<Move>{
+        let mut best_move = None;
+        let mut tt = TranspositionTable::new();
+
+        for depth in 1..=max_depth{
+            let mv = meilleur_coup(board,tables,depth,&mut tt);
+            if mv.is_some(){
+                best_move = mv;
+            }
+            println!("deph {} -> {:?}",depth,best_move);
+        }
+        best_move
+    }
+
 
     pub fn evaluation_negamax_alpha_beta(board: &mut CBoard, tables: &AttackTables, depth:u32 ,mut alpha : i32 ,beta : i32,stats: &mut SearchStats,tt : &mut TranspositionTable)->i32{
         stats.nodes +=1;
@@ -211,15 +225,17 @@
 
 
 
-    pub fn meilleur_coup(board : &mut CBoard, tables : &AttackTables, depth:u32)-> Option<Move>{
+    pub fn meilleur_coup(board : &mut CBoard, tables : &AttackTables, depth:u32 ,tt :&mut TranspositionTable)-> Option<Move>{
 
         let mut stats = SearchStats::default();
         let start = Instant::now();
-        let mut tt= TranspositionTable::new();
 
 
         let mut coups = generate_legal_move(board, tables);
-        coups.sort_by_key(|mv| -score_ordre_coup(mv));
+
+        let key = cle_position(board);
+        let tt_best = tt.get(&key).and_then(|entry| entry.best_move);
+        coups.sort_by_key(|mv| Reverse(score_ordre_coup_avec_tt(mv, tt_best)));
         let mut meilleur_mv = None;
         let mut meilleur_score = -INF;
         let mut alpha = - INF;
@@ -231,7 +247,7 @@
         for mv in coups {
             let old_board = board.clone();
             make_move(board,mv);
-            let score = -evaluation_negamax_alpha_beta(board,tables,depth -1,-beta,-alpha,&mut stats,&mut tt);
+            let score = -evaluation_negamax_alpha_beta(board,tables,depth -1,-beta,-alpha,&mut stats,tt);
             *board = old_board;
 
             if score > meilleur_score{

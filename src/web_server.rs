@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use crate::api_type::{ApiResponse, MoveRequest, NewGameRequest, game_state_from_partie};
 use crate::board::{Color, Pieces};
-use crate::eval::meilleur_coup;
+use crate::eval::{meilleur_coup_iterative};
 use crate::notation::coord_to_square_index;
 use crate::partie::Partie;
 
@@ -162,7 +162,7 @@ async fn new_game(
 fn jouer_coup_ia(partie: &mut Partie) -> Result<(), &'static str> {
     let mut board = partie.board;
     let start = Instant::now();
-    let Some(mv) = meilleur_coup(&mut board, &partie.tables, AI_DEPTH) else {
+    let Some(mv) = meilleur_coup_iterative(&mut board, &partie.tables, AI_DEPTH) else {
         return Err("Aucun coup trouve pour l'IA");
     };
     let duree = start.elapsed();
