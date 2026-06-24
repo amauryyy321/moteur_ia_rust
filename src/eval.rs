@@ -172,58 +172,8 @@ pub fn evaluation_min_max(board: &mut CBoard, tables: &AttackTables, depth: u32)
     }
     meilleure
 }
-pub fn meilleur_coup_iterative_parallel(
-    board: &mut CBoard,
-    tables: &AttackTables,
-    max_depth: u32,
-) -> Option<Move> {
-    let mut best_move = None;
-    let start = Instant::now();
-
-    for depth in 1..=max_depth {
-        if start.elapsed() >= Duration::from_millis(100000){
-            break;
-        }
-        let best_at_depth = meilleur_coup_parallel_depth(board,tables,depth,start);
-        if start.elapsed() < Duration::from_millis(100000){
-            best_move = best_at_depth;
-        }
-        println!("deph {} -> {:?}", depth, best_move);
-
-    }
-    best_move
-}
-
-pub fn meilleur_coup_parallel_depth(board : &mut CBoard,tables : &AttackTables,depth : u32,start : Instant)-> Option<Move>{
-    let coups = generate_legal_move(board,tables);
-    let board_depart = *board;
-
-    coups.par_iter().copied().map(|mv| {
-        let mut board_local = board_depart;
-        let mut stats = SearchStats::default();
-        let mut tt = TranspositionTable::new();
-
-        let limits = SearchLimits{
-            start,
-            max_time : Duration::from_millis(100000),
-        };
-
-        make_move(&mut board_local,mv);
-        let score = -evaluation_negamax_alpha_beta(
-            &mut board_local,
-            tables,
-            depth - 1,
-            -INF,
-            INF,
-            &mut stats,
-            &mut tt,
-            &limits,
-        );
-        (mv,score)
 
 
-    }).max_by_key(|(_, score)| *score).map(|(mv, _)| mv)
-}
 pub fn meilleur_coup_iterative(
     board: &mut CBoard,
     tables: &AttackTables,
@@ -231,6 +181,7 @@ pub fn meilleur_coup_iterative(
 ) -> Option<Move> {
     let mut best_move = None;
     let mut tt = TranspositionTable::new();
+    let mut heuristics = SearchHeuristics::default();
     let limits = SearchLimits {
         start: Instant::now(),
         max_time: Duration::from_millis(2000),
@@ -240,7 +191,7 @@ pub fn meilleur_coup_iterative(
         if limits.should_stop() {
             break;
         }
-        let mv = meilleur_coup(board, tables, depth, &mut tt, &limits,best_move);
+        let mv = meilleur_coup(board, tables, depth, &mut tt, &limits,best_move,&mut heuristics);
 
         if !limits.should_stop() && mv.is_some() {
             best_move = mv;
@@ -253,7 +204,7 @@ pub fn meilleur_coup_iterative(
 pub fn is_quiet_move(mv : &Move) -> bool {
     matches!(mv.flag, MoveFlag::Quiet | MoveFlag::DoublePawnPush | MoveFlag::Castling)
 }
-pub fn store_killer_move(heuristics: &mut SearchHeuristics, ply: usize, mv: Move){
+pub fn score_killer_move(heuristics: &mut SearchHeuristics, ply: usize, mv: Move){
     if ply >= MAX_PLY{
         return;
     }
@@ -307,9 +258,7 @@ pub fn evaluation_negamax_alpha_beta(
 
     let mut moves = generate_legal_move(board, tables);
     let tt_best = tt.get(&key).and_then(|entry| entry.best_move);
-    moves.sort_by_key(|mv| Reverse(score_ordre_coup_avec_tt(mv, tt_best)));
-    coups.sort_by_key(|mv| Reverse(score_root_move(mv,previous_best, tt_best)));
-    coups.sort_by_key(|mv| Reverse(score_search_move(mv,tt_best,heuristics,ply)));
+    moves.sort_by_key(|mv| Reverse(score_search_move(mv,tt_best,heuristics,ply)));
 
     if moves.is_empty() {
         if is_king_in_check(board, tables, board.side_to_move) {
@@ -329,10 +278,12 @@ pub fn evaluation_negamax_alpha_beta(
             stats,
             tt,
             limits,
+            ply +1,
+            heuristics,
         );
         unmake_move(board, coups, undo);
         if score > meilleure {
-            meilleure = meilleure.max(score);
+            meilleure = score;
             meilleur_mv = Some(coups);
         }
 
@@ -340,7 +291,7 @@ pub fn evaluation_negamax_alpha_beta(
 
         if alpha >= beta {
             if is_quiet_move(&coups){
-            store_kille_move(heuristics, ply, coups);
+            score_killer_move(heuristics, ply, coups);
             }
 
             stats.cutoffs += 1;
@@ -396,6 +347,7 @@ pub fn meilleur_coup(
     tt: &mut TranspositionTable,
     limits: &SearchLimits,
     previous_best : Option<Move>,
+    heuristics : &mut SearchHeuristics,
 ) -> Option<Move> {
     let mut stats = SearchStats::default();
     let start = Instant::now();
@@ -404,9 +356,7 @@ pub fn meilleur_coup(
 
     let key = cle_position(board);
     let tt_best = tt.get(&key).and_then(|entry| entry.best_move);
-    coups.sort_by_key(|mv| Reverse(score_ordre_coup_avec_tt(mv,tt_best)));
     coups.sort_by_key(|mv| Reverse(score_root_move(mv,previous_best, tt_best)));
-    coups.sort_by_key(|mv| Reverse(score_search_move(mv,tt_best,heuristics,ply)));
     let mut meilleur_mv = None;
     let mut meilleur_score = -INF;
     let mut alpha = -INF;
@@ -429,6 +379,8 @@ pub fn meilleur_coup(
             &mut stats,
             tt,
             limits,
+            1,
+            heuristics,
         );
         unmake_move(board, mv, undo);
 
@@ -575,7 +527,7 @@ pub fn quiescence(
 
     if moves.is_empty() {
         if in_check {
-            return -SCORE_MAT-depth as i32;
+            return -SCORE_MAT;
         }
     }
 
