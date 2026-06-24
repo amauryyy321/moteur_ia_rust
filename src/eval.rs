@@ -146,7 +146,7 @@ pub fn evaluation_min_max(board: &mut CBoard, tables: &AttackTables, depth: u32)
 
     if moves.is_empty() {
         if is_king_in_check(board, tables, board.side_to_move) {
-            return -SCORE_MAT + depth as i32;
+            return -SCORE_MAT - depth as i32;
         }
         return 0;
     }
@@ -285,7 +285,7 @@ pub fn evaluation_negamax_alpha_beta(
 
     if moves.is_empty() {
         if is_king_in_check(board, tables, board.side_to_move) {
-            return -SCORE_MAT + depth as i32;
+            return -SCORE_MAT - depth as i32;
         }
         return 0;
     }
@@ -526,7 +526,7 @@ pub fn quiescence(
 
     if moves.is_empty() {
         if in_check {
-            return -SCORE_MAT;
+            return -SCORE_MAT-depth as i32;
         }
     }
 
