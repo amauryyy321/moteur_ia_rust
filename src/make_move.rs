@@ -2,8 +2,26 @@ use crate::board::{
     BLACK_KINGSIDE, BLACK_QUEENSIDE, CBoard, Color, Pieces, WHITE_KINGSIDE, WHITE_QUEENSIDE,
 };
 use crate::chess_move::{Move, MoveFlag};
-
-pub fn make_move(board: &mut CBoard, mv: Move) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UndoMove {
+    pub captured: Option<Pieces>,
+    pub castling_rights: u8,
+    pub en_passant_square: Option<u8>,
+    pub halfmove_clock: u32,
+    pub fullmove_number: u32,
+    pub white_king_square: u8,
+    pub black_king_square: u8,
+}
+pub fn make_move(board: &mut CBoard, mv: Move) -> UndoMove {
+    let undo = UndoMove {
+        captured: mv.captured,
+        castling_rights: board.castling_rights,
+        en_passant_square: board.en_passant_square,
+        halfmove_clock: board.halfmove_clock,
+        fullmove_number: board.fullmove_number,
+        white_king_square: board.white_king_square,
+        black_king_square: board.black_king_square,
+    };
     let from_bb = 1u64 << mv.from;
     let to_bb = 1u64 << mv.to;
     let couleur_avant_coup = board.side_to_move;
@@ -138,5 +156,71 @@ pub fn make_move(board: &mut CBoard, mv: Move) {
         Color::Blanc => Color::Noir,
         Color::Noir => Color::Blanc,
     };
+    board.update_occupancies();
+    undo
+}
+
+pub fn unmake_move(board: &mut CBoard, mv: Move, undo: UndoMove) {
+    let from_bb = 1u64 << mv.from;
+    let to_bb = 1u64 << mv.to;
+
+    board.side_to_move = match board.side_to_move {
+        Color::Blanc => Color::Noir,
+        Color::Noir => Color::Blanc,
+    };
+
+    board.castling_rights = undo.castling_rights;
+    board.en_passant_square = undo.en_passant_square;
+    board.halfmove_clock = undo.halfmove_clock;
+    board.fullmove_number = undo.fullmove_number;
+    board.white_king_square = undo.white_king_square;
+    board.black_king_square = undo.black_king_square;
+
+    if let Some(promotion) = mv.promotion {
+        board.piece_bb[promotion as usize] &= !to_bb;
+        board.piece_bb[mv.piece as usize] |= from_bb;
+    } else {
+        board.piece_bb[mv.piece as usize] &= !to_bb;
+        board.piece_bb[mv.piece as usize] |= from_bb;
+    }
+
+    if mv.flag == MoveFlag::Castling {
+        match (mv.piece, mv.from, mv.to) {
+            (Pieces::RoiBlanc, 4, 6) => {
+                board.piece_bb[Pieces::TourBlanche as usize] &= !(1u64 << 5);
+                board.piece_bb[Pieces::TourBlanche as usize] |= 1u64 << 7;
+            }
+            (Pieces::RoiBlanc, 4, 2) => {
+                board.piece_bb[Pieces::TourBlanche as usize] &= !(1u64 << 3);
+                board.piece_bb[Pieces::TourBlanche as usize] |= 1u64 << 0;
+            }
+            (Pieces::RoiNoir, 60, 62) => {
+                board.piece_bb[Pieces::TourNoire as usize] &= !(1u64 << 61);
+                board.piece_bb[Pieces::TourNoire as usize] |= 1u64 << 63;
+            }
+            (Pieces::RoiNoir, 60, 58) => {
+                board.piece_bb[Pieces::TourNoire as usize] &= !(1u64 << 59);
+                board.piece_bb[Pieces::TourNoire as usize] |= 1u64 << 56;
+            }
+            _ => {}
+        }
+    }
+
+    if mv.flag == MoveFlag::EnPassant {
+        match mv.piece {
+            Pieces::PionBlanc => {
+                let captured_square = mv.to - 8;
+                board.piece_bb[Pieces::PionNoir as usize] |= 1u64 << captured_square;
+            }
+            Pieces::PionNoir => {
+                let captured_square = mv.to + 8;
+                board.piece_bb[Pieces::PionBlanc as usize] |= 1u64 << captured_square;
+            }
+            _ => {}
+        }
+    } else if let Some(captured_piece) = undo.captured {
+        board.piece_bb[captured_piece as usize] |= to_bb;
+    }
+
     board.update_occupancies();
 }

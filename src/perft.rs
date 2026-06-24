@@ -3,7 +3,7 @@ use crate::attack_tables::init_attack_tables;
 use crate::board::CBoard;
 use crate::fen::board_from_fen;
 use crate::legal_move::generate_legal_move;
-use crate::make_move::make_move;
+use crate::make_move::{make_move, unmake_move};
 
 pub fn perft(board: &mut CBoard, tables: &AttackTables, depth: u32) -> u64 {
     if depth == 0 {
@@ -13,10 +13,9 @@ pub fn perft(board: &mut CBoard, tables: &AttackTables, depth: u32) -> u64 {
     let mut nodes = 0;
 
     for mv in moves {
-        let old_board = board.clone();
-        make_move(board, mv);
+        let undo = make_move(board, mv);
         nodes += perft(board, tables, depth - 1);
-        *board = old_board;
+        unmake_move(board, mv, undo);
     }
     nodes
 }
