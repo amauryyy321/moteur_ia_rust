@@ -44,15 +44,35 @@ pub struct SearchStats {
 #[derive(Clone)]
 pub struct SearchHeuristics{
     pub killer_moves: [[Option<Move>; 2]; MAX_PLY],
+    pub history : [[i32;64];64],
 }
 impl Default for SearchHeuristics{
     fn default() -> Self{
         Self{
             killer_moves : [[None;2];MAX_PLY],
+            history: [[0;64];64]
         }
     }
 }
 
+fn update_history(heuristics : &mut SearchHeuristics,mv : Move,depth: u32){
+    if !is_quiet_move(&mv){
+        return;
+    }
+    let bonus = (depth * depth) as i32;
+    heuristics.history[mv.from as usize][mv.to as usize] += bonus;
+}
+fn maybe_decay_history(heuristics: &mut SearchHeuristics){
+    let max_value = heuristics.history.iter().flatten().copied().max().unwrap_or(0);
+    if max_value < 100_000 {
+        return;
+    }
+    for row in heuristics.history.iter_mut(){
+        for value in row.iter_mut(){
+            *value /=2
+        }
+    }
+}
 pub struct SearchLimits {
     pub start: Instant,
     pub max_time: Duration,
@@ -328,6 +348,10 @@ fn score_root_move(mv: &Move, previous_best : Option<Move>,tt_best : Option<Move
 fn score_search_move(mv : &Move,tt_best: Option<Move>,heuristics: &SearchHeuristics,ply: usize)->i32{
     if Some (*mv) == tt_best {
         return 2_000_000;
+    }
+    if is_quiet_move(mv){
+        let history_score = heuristics.history[mv.from as usize][mv.to as usize];
+        return history_score.min(700_000);
     }
     if ply < MAX_PLY{
         if heuristics.killer_moves[ply][0] == Some (*mv){
