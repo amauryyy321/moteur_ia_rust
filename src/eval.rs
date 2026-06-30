@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 const SCORE_MAT: i32 = 100_000;
 const INF: i32 = 1_000_000;
 const MAX_PLY: usize = 128;
+const ASPIRATION_WINDOW: i32 = 50;
+
 const BONUS_CAVALIER: [i32; 64] = [
     -50, -40, -30, -30, -30, -30, -40, -50, -40, -20, 0, 0, 0, 0, -20, -40, -30, 0, 10, 15, 15, 10,
     0, -30, -30, 5, 15, 20, 20, 15, 5, -30, -30, 0, 15, 20, 20, 15, 0, -30, -30, 5, 10, 15, 15, 10,
@@ -46,6 +48,11 @@ pub struct SearchStats {
 pub struct SearchHeuristics{
     pub killer_moves: [[Option<Move>; 2]; MAX_PLY],
     pub history : [[i32;64];64],
+}
+#[derive(Debug, Copy, Clone)]
+pub struct SearchResult{
+    pub best_move : Option<Move>,
+    pub score: i32,
 }
 impl Default for SearchHeuristics{
     fn default() -> Self{
@@ -211,14 +218,51 @@ pub fn meilleur_coup_iterative(
         max_time: Duration::from_millis(2000),
     };
 
+    let mut previous_score = 0;
+    let mut windows = 50;
+
     for depth in 1..=max_depth {
+
         if limits.should_stop() {
             break;
         }
-        let mv = meilleur_coup(board, tables, depth, &mut tt,&keys, &limits,best_move,&mut heuristics);
+        let use_aspiration = depth >= 2 && best_move.is_some();
+        let mut window = ASPIRATION_WINDOW;
+        let mut alpha = if use_aspiration{
+            (previous_score-window).max(-INF)
+        }else {INF};
+        let mut beta = if use_aspiration {
+        (previous_score + window).min(INF)
+    } else {
+        INF
+    };
 
-        if !limits.should_stop() && mv.is_some() {
-            best_move = mv;
+       
+        
+        loop{
+            if limits.should_stop() {
+                break;
+            }
+            let result = meilleur_coup(board,tables,depth, &mut tt, &keys, &limits, best_move, &mut heuristics, alpha,beta,);
+            if limits.should_stop(){
+                break;
+            }
+            if result.best_move.is_none(){
+                break;
+            }
+            if use_aspiration && result.score <= alpha{
+                alpha = (alpha - window).max(-INF);
+                window = (window * 2).min(INF);
+                continue;
+            }
+            if use_aspiration && result.score >= beta{
+                beta = (beta + window).min(INF);
+                window = (window * 2).min(INF);
+                continue;
+            }
+            previous_score = result.score;
+            best_move = result.best_move;
+            break;
         }
 
         println!("deph {} -> {:?}", depth, best_move);
@@ -278,7 +322,7 @@ pub fn evaluation_negamax_alpha_beta(
     }
 
     if depth == 0 {
-        return quiescence(board, tables, alpha, beta, 0, stats, limits);
+        return quiescence(board, tables, alpha, beta, 4, stats, limits);
     }
 
     let mut moves = generate_legal_move(board, tables);
@@ -379,7 +423,9 @@ pub fn meilleur_coup(
     limits: &SearchLimits,
     previous_best : Option<Move>,
     heuristics : &mut SearchHeuristics,
-) -> Option<Move> {
+    root_alpha : i32,
+    root_beta : i32,
+) -> SearchResult {
     let mut stats = SearchStats::default();
     let start = Instant::now();
 
@@ -390,10 +436,26 @@ pub fn meilleur_coup(
     coups.sort_by_key(|mv| Reverse(score_root_move(mv,previous_best, tt_best)));
     let mut meilleur_mv = None;
     let mut meilleur_score = -INF;
-    let mut alpha = -INF;
-    let beta = INF;
+    let mut alpha = root_alpha;
+    let beta = root_beta;
     if depth == 0 {
-        return None;
+        return SearchResult{
+            best_move : None,
+            score : evaluation_negamax(board),
+        };
+    }
+
+    if coups.is_empty(){
+        let score = if is_king_in_check(board,tables,board.side_to_move){
+            -SCORE_MAT
+        }
+        else{
+            0
+        };
+        return return SearchResult{
+            best_move : None,
+            score,
+        };
     }
 
     for mv in coups {
@@ -421,15 +483,21 @@ pub fn meilleur_coup(
             meilleur_score = score;
         }
         alpha = alpha.max(score);
+        if alpha >= beta{
+            break;
+        }
     }
 
-    let elapsed = start.elapsed();/*
-    println!("Temps : {}", elapsed.as_millis());
+    let elapsed = start.elapsed();
+    
     println!("Nodes : {}", stats.nodes);
     println!("QNodes : {}", stats.qnodes);
     println!("Cutoffs : {}", stats.cutoffs);
-    println!("QCutoffs : {}", stats.qcutoffs);*/
-    meilleur_mv
+    println!("QCutoffs : {}", stats.qcutoffs);
+    SearchResult{
+        best_move : meilleur_mv,
+        score: meilleur_score,
+    }
 }
 
 pub fn evaluation_blanc(board: &CBoard) -> i32 {

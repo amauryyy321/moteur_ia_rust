@@ -1131,47 +1131,36 @@ collision -> on ignore l'entree
 
 ## Objectif
 
-Au lieu de chercher chaque profondeur avec :
+Au lieu de chercher chaque profondeur avec une fenetre complete:
 
 ```rust
-alpha = -INF
-beta = INF
+alpha = -INF;
+beta = INF;
 ```
 
-on utilise le score de la profondeur precedente.
+on repart du score trouve a la profondeur precedente.
 
-Exemple :
+Exemple:
 
 ```text
 depth 7 score = +42
-depth 8 commence avec fenetre [42 - 50, 42 + 50]
+depth 8 commence avec [42 - 50, 42 + 50]
 donc [-8, 92]
 ```
 
-Une fenetre plus petite provoque plus de cutoffs.
+Si le vrai score reste dans cette fenetre, alpha-beta coupe plus vite. Si le score sort de la fenetre, on relance avec une fenetre plus large.
 
-## Changement necessaire
+## Etat de ton code avant cette etape
 
-`meilleur_coup` doit retourner :
+Dans `src/eval.rs`, tu as deja:
 
 ```text
-le meilleur coup
-le score
+meilleur_coup_iterative(...) -> Option<Move>
+meilleur_coup(...) -> Option<Move>
+evaluation_negamax_alpha_beta(..., alpha, beta, ...) -> i32
 ```
 
-Au lieu de :
-
-```rust
-Option<Move>
-```
-
-vise :
-
-```rust
-Option<(Move, i32)>
-```
-
-ou :
+Tu as aussi deja commence a ajouter:
 
 ```rust
 pub struct SearchResult {
@@ -1180,7 +1169,37 @@ pub struct SearchResult {
 }
 ```
 
-Je conseille :
+Si cette structure est deja presente dans `src/eval.rs`, ne la recree pas. Garde-la et utilise-la. Si elle n'est pas presente, ajoute-la comme indique ci-dessous.
+
+## Fichiers a modifier
+
+```text
+src/eval.rs
+```
+
+Rien a modifier dans `src/web_server.rs`, car `meilleur_coup_iterative` doit continuer a retourner `Option<Move>`.
+
+## Etape 10.1 : ajouter une constante de fenetre
+
+Placement: dans `src/eval.rs`, au debut du fichier, pres de:
+
+```rust
+const SCORE_MAT: i32 = 100_000;
+const INF: i32 = 1_000_000;
+const MAX_PLY: usize = 128;
+```
+
+Ajouter:
+
+```rust
+const ASPIRATION_WINDOW: i32 = 50;
+```
+
+## Etape 10.2 : verifier ou ajouter `SearchResult`
+
+Placement: dans `src/eval.rs`, juste apres `SearchHeuristics` ou juste avant `impl Default for SearchHeuristics`.
+
+Si tu as deja ce bloc, garde-le:
 
 ```rust
 pub struct SearchResult {
@@ -1189,43 +1208,249 @@ pub struct SearchResult {
 }
 ```
 
-## Dans iterative deepening
+Si tu veux le rendre plus pratique pour debug, tu peux remplacer sa declaration par:
 
-Où le faire :
-
-```text
-src/eval.rs, dans meilleur_coup_iterative.
+```rust
+#[derive(Debug, Clone, Copy)]
+pub struct SearchResult {
+    pub best_move: Option<Move>,
+    pub score: i32,
+}
 ```
 
-Pseudo-code :
+## Etape 10.3 : changer la signature de `meilleur_coup`
+
+Placement: dans `src/eval.rs`, chercher:
+
+```rust
+pub fn meilleur_coup(
+    board: &mut CBoard,
+    tables: &AttackTables,
+    depth: u32,
+    tt: &mut TranspositionTable,
+    keys : &ZobristKeys,
+    limits: &SearchLimits,
+    previous_best : Option<Move>,
+    heuristics : &mut SearchHeuristics,
+) -> Option<Move> {
+```
+
+Remplacer uniquement la signature par:
+
+```rust
+pub fn meilleur_coup(
+    board: &mut CBoard,
+    tables: &AttackTables,
+    depth: u32,
+    tt: &mut TranspositionTable,
+    keys: &ZobristKeys,
+    limits: &SearchLimits,
+    previous_best: Option<Move>,
+    heuristics: &mut SearchHeuristics,
+    root_alpha: i32,
+    root_beta: i32,
+) -> SearchResult {
+```
+
+Ce que tu ajoutes concretement:
+
+```text
+root_alpha: i32
+root_beta: i32
+```
+
+Ce que tu retires concretement:
+
+```text
+) -> Option<Move>
+```
+
+Ce que tu mets a la place:
+
+```text
+) -> SearchResult
+```
+
+## Etape 10.4 : modifier le debut de `meilleur_coup`
+
+Dans `meilleur_coup`, chercher ce bloc:
+
+```rust
+let mut meilleur_mv = None;
+let mut meilleur_score = -INF;
+let mut alpha = -INF;
+let beta = INF;
+if depth == 0 {
+    return None;
+}
+```
+
+Remplacer par:
+
+```rust
+let mut meilleur_mv = None;
+let mut meilleur_score = -INF;
+let mut alpha = root_alpha;
+let beta = root_beta;
+
+if depth == 0 {
+    return SearchResult {
+        best_move: None,
+        score: evaluation_negamax(board),
+    };
+}
+
+if coups.is_empty() {
+    let score = if is_king_in_check(board, tables, board.side_to_move) {
+        -SCORE_MAT
+    } else {
+        0
+    };
+
+    return SearchResult {
+        best_move: None,
+        score,
+    };
+}
+```
+
+Pourquoi ajouter le cas `coups.is_empty()` ici?
+
+Parce qu'avant, si la racine n'avait aucun coup legal, `meilleur_score` restait a `-INF`. Avec `SearchResult`, il faut retourner un score propre.
+
+## Etape 10.5 : ajouter un cutoff a la racine
+
+Dans `meilleur_coup`, chercher la fin de la boucle:
+
+```rust
+if score > meilleur_score {
+    meilleur_mv = Some(mv);
+    meilleur_score = score;
+}
+alpha = alpha.max(score);
+```
+
+Remplacer par:
+
+```rust
+if score > meilleur_score {
+    meilleur_mv = Some(mv);
+    meilleur_score = score;
+}
+
+alpha = alpha.max(score);
+
+if alpha >= beta {
+    break;
+}
+```
+
+Pourquoi?
+
+Avec une fenetre d'aspiration, `beta` peut etre proche du score attendu. Si un coup depasse `beta`, cette recherche est un `fail high`; inutile de continuer tous les coups racine, l'iterative deepening relancera avec une fenetre plus large.
+
+## Etape 10.6 : changer le retour final de `meilleur_coup`
+
+Dans `meilleur_coup`, chercher tout a la fin:
+
+```rust
+meilleur_mv
+```
+
+Remplacer par:
+
+```rust
+SearchResult {
+    best_move: meilleur_mv,
+    score: meilleur_score,
+}
+```
+
+Si tu as des `println!` de stats juste avant, garde-les. Ils restent utiles.
+
+## Etape 10.7 : remplacer l'appel dans `meilleur_coup_iterative`
+
+Placement: dans `src/eval.rs`, dans `meilleur_coup_iterative`.
+
+Chercher le bloc actuel:
+
+```rust
+for depth in 1..=max_depth {
+    if limits.should_stop() {
+        break;
+    }
+    let mv = meilleur_coup(board, tables, depth, &mut tt,&keys, &limits,best_move,&mut heuristics);
+
+    if !limits.should_stop() && mv.is_some() {
+        best_move = mv;
+    }
+
+    println!("deph {} -> {:?}", depth, best_move);
+}
+```
+
+Avant ce `for`, ajouter:
 
 ```rust
 let mut previous_score = 0;
-let mut window = 50;
+```
 
+Puis remplacer tout le bloc `for depth in 1..=max_depth { ... }` par:
+
+```rust
 for depth in 1..=max_depth {
-    let mut alpha = previous_score - window;
-    let mut beta = previous_score + window;
+    if limits.should_stop() {
+        break;
+    }
+
+    let use_aspiration = depth >= 2 && best_move.is_some();
+    let mut window = ASPIRATION_WINDOW;
+    let mut alpha = if use_aspiration {
+        previous_score - window
+    } else {
+        -INF
+    };
+    let mut beta = if use_aspiration {
+        previous_score + window
+    } else {
+        INF
+    };
 
     loop {
-        let result = meilleur_coup_with_window(
+        if limits.should_stop() {
+            break;
+        }
+
+        let result = meilleur_coup(
             board,
             tables,
             depth,
+            &mut tt,
+            &keys,
+            &limits,
+            best_move,
+            &mut heuristics,
             alpha,
             beta,
-            ...
         );
 
-        if result.score <= alpha {
-            alpha -= window;
-            window *= 2;
+        if limits.should_stop() {
+            break;
+        }
+
+        if result.best_move.is_none() {
+            break;
+        }
+
+        if use_aspiration && result.score <= alpha {
+            alpha = (alpha - window).max(-INF);
+            window = (window * 2).min(INF);
             continue;
         }
 
-        if result.score >= beta {
-            beta += window;
-            window *= 2;
+        if use_aspiration && result.score >= beta {
+            beta = (beta + window).min(INF);
+            window = (window * 2).min(INF);
             continue;
         }
 
@@ -1233,31 +1458,91 @@ for depth in 1..=max_depth {
         best_move = result.best_move;
         break;
     }
+
+    println!("depth {} -> {:?}, score {}", depth, best_move, previous_score);
 }
 ```
 
-## Explication
-
-Si le score sort de la fenetre :
+Ce que tu retires:
 
 ```text
-fail low  -> score <= alpha -> fenetre trop haute
-fail high -> score >= beta  -> fenetre trop basse
+let mv = meilleur_coup(...)
+if mv.is_some() { best_move = mv; }
 ```
 
-Alors on relance avec une fenetre plus large.
-
-## Quand l'ajouter ?
-
-Apres :
+Ce que tu mets a la place:
 
 ```text
-PV ordering
+let result = meilleur_coup(..., alpha, beta)
+si fail low  -> elargir alpha
+si fail high -> elargir beta
+sinon previous_score = result.score et best_move = result.best_move
+```
+
+## Etape 10.8 : verifier les appels restants
+
+Commande:
+
+```bash
+rg -n "meilleur_coup\\(" src
+```
+
+Il doit rester:
+
+```text
+la definition de meilleur_coup
+un appel dans meilleur_coup_iterative
+```
+
+Si un autre appel existe, il faut lui ajouter les deux derniers arguments:
+
+```rust
+-INF,
+INF,
+```
+
+## Verification
+
+Compiler:
+
+```bash
+cargo check
+```
+
+Tester:
+
+```bash
+cargo test
+```
+
+Puis lancer une recherche et verifier dans les logs:
+
+```text
+depth 1 -> ...
+depth 2 -> ...
+depth 3 -> ...
+```
+
+Si tu veux voir les relances, ajoute temporairement dans les deux branches fail low/fail high:
+
+```rust
+println!("aspiration fail low depth {}, score {}, alpha {}", depth, result.score, alpha);
+println!("aspiration fail high depth {}, score {}, beta {}", depth, result.score, beta);
+```
+
+Retire ces `println!` apres debug.
+
+## Quand l'ajouter
+
+Seulement quand:
+
+```text
+PV ordering fonctionne
 TT stable
 move ordering correct
 ```
 
-Sinon tu risques de relancer trop souvent.
+Sinon le score varie trop entre les profondeurs et la fenetre relance souvent.
 
 ---
 
@@ -1265,58 +1550,38 @@ Sinon tu risques de relancer trop souvent.
 
 ## Objectif
 
-Null move pruning teste :
+Null move pruning coupe une branche quand la position est tellement bonne que meme "passer son tour" reste suffisant pour depasser `beta`.
 
-```text
-si je passe mon tour et que ma position est encore tellement bonne,
-alors les vrais coups sont probablement bons aussi
-```
+Attention: aux echecs on ne peut pas passer son tour. C'est une approximation. Elle est dangereuse en zugzwang, surtout dans les finales de pions.
 
-On fait une recherche reduite apres un "coup nul".
-
-Si meme en passant le tour on depasse beta :
-
-```text
-cutoff
-```
-
-## Attention
-
-Aux echecs, on ne peut pas passer son tour.
-
-Donc null move interdit si :
-
-```text
-le roi est en echec
-```
-
-Il faut aussi etre prudent en finales de pions, a cause du zugzwang.
-
-## Fichier concerne
-
-```text
-src/eval.rs
-src/make_move.rs si tu ajoutes make_null_move
-```
-
-## Fonctions null move
-
-Où le faire :
+## Fichiers a modifier
 
 ```text
 src/make_move.rs
+src/eval.rs
 ```
 
-Structure :
+## Etape 11.1 : ajouter `UndoNullMove`
+
+Placement: dans `src/make_move.rs`, juste apres la struct `UndoMove`.
+
+Ajouter:
 
 ```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UndoNullMove {
     pub en_passant_square: Option<u8>,
     pub side_to_move: Color,
 }
 ```
 
-Fonction :
+Tu n'as pas besoin de stocker les bitboards, car un null move ne bouge aucune piece.
+
+## Etape 11.2 : ajouter `make_null_move` et `unmake_null_move`
+
+Placement: dans `src/make_move.rs`, tout en bas du fichier, apres `unmake_move`.
+
+Ajouter:
 
 ```rust
 pub fn make_null_move(board: &mut CBoard) -> UndoNullMove {
@@ -1340,22 +1605,102 @@ pub fn unmake_null_move(board: &mut CBoard, undo: UndoNullMove) {
 }
 ```
 
-Pas besoin de changer les pieces.
-
-## Dans alpha-beta
-
-Où le faire :
+Ce que tu ne modifies pas:
 
 ```text
-src/eval.rs, dans evaluation_negamax_alpha_beta, apres le test TT et avant generate_legal_move.
+piece_bb
+occupe_bb
+vide_bb
+white_king_square
+black_king_square
+castling_rights
 ```
 
-Conditions :
+## Etape 11.3 : importer les fonctions null move dans `eval.rs`
+
+Placement: en haut de `src/eval.rs`.
+
+Chercher:
 
 ```rust
+use crate::make_move::{make_move, unmake_move};
+```
+
+Remplacer par:
+
+```rust
+use crate::make_move::{make_move, make_null_move, unmake_move, unmake_null_move};
+```
+
+## Etape 11.4 : ajouter `has_non_pawn_material`
+
+Placement: dans `src/eval.rs`, juste apres `is_quiet_move`.
+
+Ajouter:
+
+```rust
+fn has_non_pawn_material(board: &CBoard, color: Color) -> bool {
+    let pieces = match color {
+        Color::Blanc => [
+            Pieces::CavalierBlanc,
+            Pieces::FouBlanc,
+            Pieces::TourBlanche,
+            Pieces::DameBlanche,
+        ],
+        Color::Noir => [
+            Pieces::CavalierNoir,
+            Pieces::FouNoir,
+            Pieces::TourNoire,
+            Pieces::DameNoire,
+        ],
+    };
+
+    pieces
+        .iter()
+        .any(|piece| board.piece_bb[*piece as usize] != 0)
+}
+```
+
+Pourquoi par couleur?
+
+Parce que le danger de zugzwang concerne surtout le camp qui doit jouer. Si le camp au trait n'a que des pions, le null move est plus risque.
+
+## Etape 11.5 : inserer le null move dans alpha-beta
+
+Placement: dans `src/eval.rs`, dans `evaluation_negamax_alpha_beta`.
+
+Prerequis pratique: les blocs ci-dessous utilisent `QUIESCENCE_DEPTH`. Si cette constante n'existe pas encore dans ton code, fais d'abord les etapes 13.1 et 13.2, ou garde temporairement le `4` en dur dans les deux blocs de ce chapitre.
+
+Chercher ce bloc:
+
+```rust
+if depth == 0 {
+    return quiescence(board, tables, alpha, beta, QUIESCENCE_DEPTH, stats, limits);
+}
+
+let mut moves = generate_legal_move(board, tables);
+```
+
+Si tu n'as pas encore fait le chapitre 13 et que ton code contient encore le `4` en dur, le bloc a chercher sera:
+
+```rust
+if depth == 0 {
+    return quiescence(board, tables, alpha, beta, 4, stats, limits);
+}
+
+let mut moves = generate_legal_move(board, tables);
+```
+
+Remplacer par:
+
+```rust
+if depth == 0 {
+    return quiescence(board, tables, alpha, beta, QUIESCENCE_DEPTH, stats, limits);
+}
+
 let in_check = is_king_in_check(board, tables, board.side_to_move);
 
-if depth >= 3 && !in_check && has_non_pawn_material(board) {
+if depth >= 3 && !in_check && has_non_pawn_material(board, board.side_to_move) {
     let reduction = 2;
     let undo = make_null_move(board);
 
@@ -1367,6 +1712,7 @@ if depth >= 3 && !in_check && has_non_pawn_material(board) {
         -beta + 1,
         stats,
         tt,
+        keys,
         limits,
         ply + 1,
         heuristics,
@@ -1379,49 +1725,34 @@ if depth >= 3 && !in_check && has_non_pawn_material(board) {
         return beta;
     }
 }
+
+let mut moves = generate_legal_move(board, tables);
 ```
 
-## `has_non_pawn_material`
+Ce bloc doit etre avant `generate_legal_move`, parce que son but est justement d'eviter de generer et chercher tous les coups quand une coupure rapide suffit.
 
-Où le faire :
+## Verification
+
+Compiler:
+
+```bash
+cargo check
+```
+
+Puis lancer une recherche et verifier que:
 
 ```text
-src/eval.rs
+stats.null_cutoffs augmente parfois
+le moteur ne plante pas
+les tests perft restent OK
 ```
 
-```rust
-fn has_non_pawn_material(board: &CBoard) -> bool {
-    let pieces = [
-        Pieces::CavalierBlanc,
-        Pieces::FouBlanc,
-        Pieces::TourBlanche,
-        Pieces::DameBlanche,
-        Pieces::CavalierNoir,
-        Pieces::FouNoir,
-        Pieces::TourNoire,
-        Pieces::DameNoire,
-    ];
+Les tests perft ne doivent pas changer, car le null move ne modifie pas la generation de coups.
 
-    pieces
-        .iter()
-        .any(|piece| board.piece_bb[*piece as usize] != 0)
-}
-```
+Commande:
 
-Pourquoi ?
-
-Le null move est dangereux dans les finales de pions, parce que parfois etre oblige de jouer est un desavantage.
-
-C'est le zugzwang.
-
-## Quand l'ajouter ?
-
-Apres :
-
-```text
-TT correcte
-quiescence correcte
-tests perft OK
+```bash
+cargo test --release perft
 ```
 
 ---
@@ -1430,66 +1761,70 @@ tests perft OK
 
 ## Objectif
 
-LMR part d'une idee :
+LMR reduit la profondeur pour les coups calmes qui arrivent tard dans l'ordre des coups. Si un coup reduit semble finalement bon, on le re-cherche a profondeur complete.
+
+## Fichier a modifier
 
 ```text
-apres avoir trie les coups,
-les premiers coups sont probablement importants
-les coups tardifs et calmes sont souvent mauvais
+src/eval.rs
 ```
 
-Donc on cherche les coups tardifs moins profondement.
+## Etape 12.1 : reutiliser `in_check`
 
-Si le coup semble finalement bon, on le re-cherche a profondeur complete.
-
-## Conditions de base
-
-Ne reduis pas :
-
-```text
-le premier coup
-les captures
-les promotions
-les positions en echec
-les petites profondeurs
-```
-
-Conditions typiques :
+Si tu as ajoute le null move, tu as deja ce bloc avant `generate_legal_move`:
 
 ```rust
-let can_reduce =
-    depth >= 3
-    && move_index >= 4
-    && !in_check
-    && is_quiet_move(&mv);
+let in_check = is_king_in_check(board, tables, board.side_to_move);
 ```
 
-## Où le faire
+Si tu n'as pas ajoute le null move, ajoute cette ligne juste avant:
 
-```text
-src/eval.rs, dans la boucle for moves de evaluation_negamax_alpha_beta.
+```rust
+let mut moves = generate_legal_move(board, tables);
 ```
 
-Il faut connaitre `move_index`.
+## Etape 12.2 : changer la boucle des coups
 
-Au lieu de :
+Dans `evaluation_negamax_alpha_beta`, chercher:
 
 ```rust
 for coups in moves {
 ```
 
-faire :
+Remplacer par:
 
 ```rust
 for (move_index, coups) in moves.into_iter().enumerate() {
 ```
 
-## Code conceptuel
+Ce changement donne l'indice du coup apres tri. Les premiers coups ont `move_index = 0`, `1`, `2`.
+
+## Etape 12.3 : remplacer le calcul du score dans la boucle
+
+Dans la boucle, chercher le bloc actuel:
 
 ```rust
 let undo = make_move(board, coups);
+let score = -evaluation_negamax_alpha_beta(
+    board,
+    tables,
+    depth - 1,
+    -beta,
+    -alpha,
+    stats,
+    tt,
+    keys,
+    limits,
+    ply +1,
+    heuristics,
+);
+unmake_move(board, coups, undo);
+```
 
-let mut score;
+Remplacer par:
+
+```rust
+let undo = make_move(board, coups);
 
 let can_reduce =
     depth >= 3
@@ -1497,8 +1832,8 @@ let can_reduce =
     && !in_check
     && is_quiet_move(&coups);
 
-if can_reduce {
-    score = -evaluation_negamax_alpha_beta(
+let mut score = if can_reduce {
+    -evaluation_negamax_alpha_beta(
         board,
         tables,
         depth - 2,
@@ -1506,28 +1841,30 @@ if can_reduce {
         -alpha,
         stats,
         tt,
+        keys,
         limits,
         ply + 1,
         heuristics,
-    );
-
-    if score > alpha {
-        stats.lmr_researches += 1;
-
-        score = -evaluation_negamax_alpha_beta(
-            board,
-            tables,
-            depth - 1,
-            -beta,
-            -alpha,
-            stats,
-            tt,
-            limits,
-            ply + 1,
-            heuristics,
-        );
-    }
+    )
 } else {
+    -evaluation_negamax_alpha_beta(
+        board,
+        tables,
+        depth - 1,
+        -beta,
+        -alpha,
+        stats,
+        tt,
+        keys,
+        limits,
+        ply + 1,
+        heuristics,
+    )
+};
+
+if can_reduce && score > alpha {
+    stats.lmr_researches += 1;
+
     score = -evaluation_negamax_alpha_beta(
         board,
         tables,
@@ -1536,6 +1873,7 @@ if can_reduce {
         -alpha,
         stats,
         tt,
+        keys,
         limits,
         ply + 1,
         heuristics,
@@ -1545,129 +1883,221 @@ if can_reduce {
 unmake_move(board, coups, undo);
 ```
 
-## Explication
-
-Recherche reduite :
-
-```rust
-depth - 2
-```
-
-Fenetre nulle :
-
-```rust
--alpha - 1, -alpha
-```
-
-Elle sert seulement a savoir :
+Ce que tu ne dois pas retirer:
 
 ```text
-est-ce que ce coup peut battre alpha ?
+le bloc qui met a jour meilleure/meilleur_mv
+le bloc alpha = alpha.max(score)
+le bloc cutoff alpha >= beta
+le tt.insert final
 ```
 
-Si oui, on re-cherche avec la vraie fenetre :
+Tu remplaces seulement la partie qui fait `make_move`, appelle la recherche recursive, puis `unmake_move`.
+
+## Etape 12.4 : verifier le cutoff apres LMR
+
+Le bloc qui suit doit rester comme ca:
 
 ```rust
--beta, -alpha
+if score > meilleure {
+    meilleure = score;
+    meilleur_mv = Some(coups);
+}
+
+alpha = alpha.max(score);
+
+if alpha >= beta {
+    if is_quiet_move(&coups) {
+        score_killer_move(heuristics, ply, coups);
+    }
+
+    stats.cutoffs += 1;
+    break;
+}
 ```
 
-## Risque
+Le chapitre 14 explique comment ajouter aussi `update_history` dans ce bloc.
 
-LMR peut rendre le moteur plus rapide mais moins stable si :
+## Verification
+
+Compiler:
+
+```bash
+cargo check
+```
+
+Puis surveiller:
 
 ```text
-move ordering mauvais
-quiescence faible
-TT instable
+stats.lmr_researches
+nodes
+best_move
 ```
 
-Donc ne l'ajoute pas trop tot.
+Si `lmr_researches` explose ou si le meilleur coup devient instable, augmente la prudence:
+
+```rust
+move_index >= 6
+```
+
+au lieu de:
+
+```rust
+move_index >= 4
+```
 
 ---
 
 # 13. Quiescence efficace
 
-Tu as deja un document dedie :
+Tu as deja un document dedie:
 
 ```text
 optimisation_moteur_echecs_quiescence_tutoriel.md
 ```
 
-Le resume :
+Mais voici les changements concrets a faire dans ce fichier-ci pour ton code actuel.
 
-```text
-1. ajouter QUIESCENCE_DEPTH
-2. appeler quiescence avec qdepth > 0
-3. si le roi est en echec, generer tous les coups legaux
-4. sinon faire stand_pat
-5. generer directement les coups tactiques
-6. trier captures/promotions
-7. ajouter delta pruning
-8. plus tard ajouter SEE
-```
-
-Point cle :
-
-```text
-quiescence hors echec -> captures/promotions/en passant
-quiescence en echec   -> tous les coups legaux
-```
-
-Pourquoi ?
-
-Parce qu'une sortie d'echec peut etre un coup calme.
-
-## Où sont les changements principaux
+## Fichiers a modifier
 
 ```text
 src/eval.rs
-    QUIESCENCE_DEPTH
-    quiescence
-    score_ordre_coup_quiescence
-    delta pruning
-
-src/pseudo_legal_move.rs
-    generate_pseudo_tactical_move
-
-src/legal_move.rs
-    generate_tactical_legal_move branche sur generate_pseudo_tactical_move
 ```
 
-## Quand faire la quiescence dans l'ordre global ?
-
-Je conseille :
+Plus tard seulement:
 
 ```text
-apres MVV-LVA propre
-avant null move pruning et LMR
+src/pseudo_legal_move.rs
+src/legal_move.rs
 ```
 
-Parce que null move et LMR sont plus dangereux si la feuille de recherche est tactiquement faible.
+## Etape 13.1 : ajouter une constante
+
+Placement: dans `src/eval.rs`, pres de `SCORE_MAT`, `INF`, `MAX_PLY`.
+
+Ajouter:
+
+```rust
+const QUIESCENCE_DEPTH: u32 = 4;
+```
+
+## Etape 13.2 : retirer le nombre magique `4`
+
+Dans `evaluation_negamax_alpha_beta`, chercher:
+
+```rust
+return quiescence(board, tables, alpha, beta, 4, stats, limits);
+```
+
+Remplacer par:
+
+```rust
+return quiescence(board, tables, alpha, beta, QUIESCENCE_DEPTH, stats, limits);
+```
+
+Ce que tu retires:
+
+```text
+le 4 en dur
+```
+
+Ce que tu ajoutes:
+
+```text
+QUIESCENCE_DEPTH
+```
+
+## Etape 13.3 : corriger le cas ou le roi est en echec
+
+Dans `quiescence`, chercher:
+
+```rust
+let mut moves = generate_tactical_legal_move(board, tables);
+```
+
+Remplacer par:
+
+```rust
+let mut moves = if in_check {
+    generate_legal_move(board, tables)
+} else {
+    generate_tactical_legal_move(board, tables)
+};
+```
+
+Pourquoi?
+
+Si le roi est en echec, une sortie d'echec peut etre un coup calme. Une quiescence qui ne regarde que les captures peut evaluer a tort une position comme perdue ou mate.
+
+## Etape 13.4 : garder la suite de `quiescence`
+
+Ne retire pas:
+
+```rust
+moves.sort_by_key(|mv| Reverse(score_ordre_coup(mv)));
+```
+
+Ne retire pas non plus la boucle:
+
+```rust
+for mv in moves {
+    ...
+}
+```
+
+Cette etape corrige seulement le type de coups generes quand le roi est en echec.
+
+## Verification
+
+Compiler:
+
+```bash
+cargo check
+```
+
+Tester:
+
+```bash
+cargo test
+```
+
+Surveiller ensuite:
+
+```text
+qnodes augmente
+le moteur ne ralentit pas de facon explosive
+les positions d'echec ne donnent pas de scores absurdes
+```
+
+Si c'est trop lent, baisse temporairement:
+
+```rust
+const QUIESCENCE_DEPTH: u32 = 2;
+```
 
 ---
 
 # 14. Relier toutes les optimisations dans le score des coups
 
-A terme, tu veux une fonction centrale de scoring.
+Ce chapitre corrige un point important dans ton code actuel.
 
-Où le faire :
+Dans `score_search_move`, tu testes actuellement les coups calmes avant les killer moves. Comme les killer moves sont justement des coups calmes, le code peut retourner le score history avant d'atteindre le test killer.
+
+## Fichier a modifier
 
 ```text
 src/eval.rs
 ```
 
-Signature :
+## Etape 14.1 : remplacer `score_search_move`
+
+Chercher toute la fonction:
 
 ```rust
-fn score_search_move(
-    mv: &Move,
-    tt_best: Option<Move>,
-    heuristics: &SearchHeuristics,
-    ply: usize,
-) -> i32
+fn score_search_move(mv : &Move,tt_best: Option<Move>,heuristics: &SearchHeuristics,ply: usize)->i32{
 ```
 
-Ordre conseille :
+Remplacer toute la fonction par:
 
 ```rust
 fn score_search_move(
@@ -1680,7 +2110,13 @@ fn score_search_move(
         return 2_000_000;
     }
 
-    if matches!(mv.flag, MoveFlag::Capture | MoveFlag::EnPassant | MoveFlag::Promotion | MoveFlag::PromotionCapture) {
+    if matches!(
+        mv.flag,
+        MoveFlag::Capture
+            | MoveFlag::EnPassant
+            | MoveFlag::Promotion
+            | MoveFlag::PromotionCapture
+    ) {
         return 1_000_000 + score_ordre_coup(mv);
     }
 
@@ -1702,214 +2138,289 @@ fn score_search_move(
 }
 ```
 
-Puis partout dans la recherche normale :
+Ordre voulu:
 
-```rust
-moves.sort_by_key(|mv| Reverse(score_search_move(mv, tt_best, heuristics, ply)));
+```text
+TT best move
+captures/promotions
+killer moves
+history
+reste
 ```
 
-Cette fonction devient le coeur du move ordering.
+## Etape 14.2 : brancher vraiment `update_history`
+
+Tu as deja:
+
+```rust
+fn update_history(heuristics : &mut SearchHeuristics,mv : Move,depth: u32)
+fn maybe_decay_history(heuristics: &mut SearchHeuristics)
+```
+
+Mais dans ton bloc cutoff, tu ne mets actuellement a jour que les killer moves.
+
+Dans `evaluation_negamax_alpha_beta`, chercher:
+
+```rust
+if alpha >= beta {
+    if is_quiet_move(&coups){
+    score_killer_move(heuristics, ply, coups);
+    }
+
+    stats.cutoffs += 1;
+    break;
+}
+```
+
+Remplacer par:
+
+```rust
+if alpha >= beta {
+    if is_quiet_move(&coups) {
+        score_killer_move(heuristics, ply, coups);
+        update_history(heuristics, coups, depth);
+        maybe_decay_history(heuristics);
+    }
+
+    stats.cutoffs += 1;
+    break;
+}
+```
+
+Ce que tu ajoutes:
+
+```text
+update_history(...)
+maybe_decay_history(...)
+```
+
+Pourquoi?
+
+Sinon `history` reste presque toujours a zero et ne sert pas vraiment dans `score_search_move`.
+
+## Verification
+
+Compiler:
+
+```bash
+cargo check
+```
+
+Puis ajouter temporairement un log dans `maybe_decay_history` ou inspecter en debug si les valeurs history augmentent. Retire le log apres verification.
 
 ---
 
 # 15. Tests et validation apres chaque etape
 
-## Toujours lancer
+## Commandes minimales
+
+Apres chaque chapitre implemente:
 
 ```bash
+cargo check
 cargo test
-```
-
-Puis :
-
-```bash
 cargo test --release perft
 ```
 
-## Pour les changements de recherche
+## Ce qu'il faut noter dans les logs
 
-Teste une position fixe.
+Dans `meilleur_coup`, tu affiches deja:
 
-Note :
-
-```text
-depth
-temps
-nodes
-qnodes
-cutoffs
-tt_hits
-tt_cutoffs
-best_move
-score
+```rust
+println!("Nodes : {}", stats.nodes);
+println!("QNodes : {}", stats.qnodes);
+println!("Cutoffs : {}", stats.cutoffs);
+println!("QCutoffs : {}", stats.qcutoffs);
 ```
 
-## Pour Zobrist
+Ajoute temporairement si necessaire:
 
-Tests indispensables :
-
-```text
-meme position -> meme hash
-position differente -> hash different
-make/unmake -> hash revient pareil
-side_to_move change -> hash change
-castling_rights change -> hash change
-en_passant_square change -> hash change
+```rust
+println!("Null cutoffs : {}", stats.null_cutoffs);
+println!("LMR researches : {}", stats.lmr_researches);
 ```
 
-## Pour TT fixe
+Retire ou commente ces logs quand tu joues via le serveur web, sinon la sortie devient vite illisible.
 
-Tests :
+## Validation par optimisation
+
+Aspiration windows:
 
 ```text
-insert puis get meme key -> entree retrouvee
-get autre key meme index -> None
-remplacement profondeur faible -> ne remplace pas
-remplacement profondeur forte -> remplace
+le moteur compile
+meilleur_coup_iterative retourne toujours Option<Move>
+les logs montrent un score par profondeur
+les fail low/fail high ne bouclent pas sans fin
 ```
 
-## Pour killer/history
-
-Pas besoin de tester la force directement.
-
-Teste surtout :
+Null move:
 
 ```text
-store_killer_move place le nouveau coup en slot 0
-ancien slot 0 passe en slot 1
-doublon ne duplique pas
-history augmente sur cutoff calme
-history ne change pas sur capture
+perft inchange
+null_cutoffs augmente parfois
+pas de null move si le roi est en echec
+pas de null move si le camp au trait n'a que des pions
+```
+
+LMR:
+
+```text
+lmr_researches reste raisonnable
+best_move ne change pas de facon chaotique a faible profondeur
+nodes baisse ou reste stable
+```
+
+Quiescence:
+
+```text
+qnodes augmente
+qcutoffs augmente parfois
+les positions d'echec sont gerees avec tous les coups legaux
+```
+
+Move ordering:
+
+```text
+killer moves testes avant history
+history augmente seulement sur cutoff calme
+captures restent prioritaires
 ```
 
 ---
 
 # 16. Roadmap concrete
 
-Voici une feuille de route realiste.
+Voici l'ordre conseille a partir de ton code actuel.
 
-## Phase 1 : move ordering solide
+## Phase 1 : rendre l'existant coherent
 
 ```text
-[ ] MVV-LVA propre
-[ ] score_search_move central
-[ ] PV move ordering root
-[ ] killer moves
-[ ] history heuristic
+[ ] remplacer score_search_move pour tester killer avant history
+[ ] appeler update_history dans le cutoff alpha >= beta
+[ ] remplacer le 4 de quiescence par QUIESCENCE_DEPTH
+[ ] corriger quiescence en echec avec generate_legal_move
 ```
 
-Objectif :
+Pourquoi cette phase d'abord?
+
+Parce que aspiration windows, null move et LMR dependent tous d'un score de recherche stable et d'un move ordering correct.
+
+## Phase 2 : aspiration windows
 
 ```text
-plus de cutoffs
-moins de nodes
-meilleur premier coup
+[ ] ajouter ASPIRATION_WINDOW
+[ ] garder/ajouter SearchResult
+[ ] changer meilleur_coup -> SearchResult
+[ ] ajouter root_alpha/root_beta a meilleur_coup
+[ ] ajouter la boucle fail low/fail high dans meilleur_coup_iterative
+[ ] verifier avec cargo check et cargo test
 ```
 
-## Phase 2 : table de transposition plus rapide
+Objectif:
 
 ```text
-[ ] Zobrist hash calcule depuis board
-[ ] remplacer ClePosition par u64
-[ ] TT fixe Vec<Option<TTEntry>>
-[ ] remplacement par profondeur
+utiliser le score precedent pour reduire la fenetre de recherche
 ```
 
-Objectif :
+## Phase 3 : null move pruning
 
 ```text
-lookup plus rapide
-moins d'allocation
-memoire controlee
+[ ] ajouter UndoNullMove dans src/make_move.rs
+[ ] ajouter make_null_move / unmake_null_move
+[ ] importer ces fonctions dans src/eval.rs
+[ ] ajouter has_non_pawn_material(board, color)
+[ ] inserer le bloc null move avant generate_legal_move
+[ ] verifier null_cutoffs et perft
 ```
 
-## Phase 3 : recherche plus agressive
+Objectif:
 
 ```text
-[ ] aspiration windows
-[ ] quiescence efficace
-[ ] null move pruning
-[ ] late move reductions
+couper vite les positions clairement au-dessus de beta
 ```
 
-Objectif :
+## Phase 4 : LMR
 
 ```text
-atteindre une profondeur plus grande sans perdre trop de precision
+[ ] ajouter move_index avec enumerate
+[ ] reduire seulement les coups calmes tardifs
+[ ] re-chercher a profondeur complete si score > alpha
+[ ] surveiller lmr_researches
+```
+
+Objectif:
+
+```text
+chercher moins profondement les coups probablement faibles
 ```
 
 ---
 
 # 17. Ce qu'il faut eviter
 
-## Tout faire en meme temps
+## Ne pas modifier toutes les optimisations en une fois
 
-Mauvais plan :
-
-```text
-Zobrist + TT fixe + null move + LMR + quiescence en une seule fois
-```
-
-Si le moteur joue mal, tu ne sauras pas pourquoi.
-
-## Ajouter LMR trop tot
-
-LMR depend fortement du move ordering.
-
-Si ton tri est mauvais :
+Mauvais plan:
 
 ```text
-tu reduis peut-etre un bon coup
+aspiration windows + null move + LMR + quiescence dans le meme commit
 ```
 
-## Ajouter null move sans garde-fous
-
-Null move est puissant, mais dangereux en zugzwang.
-
-Toujours commencer avec :
+Bon plan:
 
 ```text
-depth >= 3
-pas en echec
-has_non_pawn_material
-reduction prudente
+une optimisation
+cargo check
+cargo test
+petit test de recherche
+commit ou note de sauvegarde
+optimisation suivante
 ```
 
-## Partager une HashMap avec Mutex en multithread
+## Ne pas ajouter LMR avant de corriger `score_search_move`
 
-Ce document vise le mono-thread, mais note importante :
+Si le tri met un bon coup trop tard, LMR peut reduire ce bon coup. Donc corrige d'abord:
 
 ```text
-Mutex<HashMap<...>> dans une TT appelee des millions de fois peut etre catastrophique
+TT move
+captures
+killer moves
+history
 ```
 
-Pour le multi-thread, il faudra une TT pensee pour ca.
+## Ne pas utiliser null move en finale de pions
+
+Garde toujours:
+
+```rust
+has_non_pawn_material(board, board.side_to_move)
+```
+
+Sans ca, le moteur peut rater des zugzwangs simples.
+
+## Ne pas laisser les logs permanents dans le serveur web
+
+Les logs sont utiles pendant l'optimisation, mais le serveur appelle l'IA via:
+
+```text
+src/web_server.rs -> jouer_coup_ia -> meilleur_coup_iterative
+```
+
+Donc trop de `println!` peut rendre le serveur tres bruyant.
 
 ---
 
 # 18. Resume ultra-court
 
-Si tu veux le plus gros gain propre :
+Ordre concret:
 
 ```text
-1. meilleur move ordering
-2. Zobrist
-3. TT fixe
-4. quiescence efficace
-5. null move
-6. LMR
+1. Corriger score_search_move.
+2. Brancher update_history.
+3. Corriger quiescence en echec.
+4. Ajouter SearchResult et aspiration windows.
+5. Ajouter null move avec garde-fous.
+6. Ajouter LMR prudemment.
 ```
 
-La force d'un moteur ne vient pas seulement de chercher plus vite.
-
-Elle vient de :
-
-```text
-chercher les bons coups en premier
-memoriser les positions deja vues
-couper les branches inutiles
-ne pas s'arreter au milieu des captures
-reduire prudemment les coups peu prometteurs
-```
-
-Si tu suis cet ordre, tu construis un moteur que tu peux garder et ameliorer, pas une suite de patchs fragiles.
+Pour chaque etape, ne te contente pas de copier le concept. Cherche le bloc indique, remplace exactement le code indique, compile, teste, puis seulement ensuite passe a l'etape suivante.
