@@ -1406,12 +1406,12 @@ for depth in 1..=max_depth {
     let use_aspiration = depth >= 2 && best_move.is_some();
     let mut window = ASPIRATION_WINDOW;
     let mut alpha = if use_aspiration {
-        previous_score - window
+        (previous_score - window).max(-INF)
     } else {
         -INF
     };
     let mut beta = if use_aspiration {
-        previous_score + window
+        (previous_score + window).min(INF)
     } else {
         INF
     };
