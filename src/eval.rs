@@ -6,6 +6,7 @@ use crate::legal_move::{generate_legal_move, generate_tactical_legal_move};
 use crate::legality::is_king_in_check;
 use crate::make_move::{make_move, unmake_move};
 use crate::position_key::{TTEntry, TTFlag, TranspositionTable, cle_position};
+use crate::zobrist::{zobrist_hash,ZobristKeys};
 
 use rayon::prelude::*;
 use std::cmp::Reverse;
@@ -201,7 +202,10 @@ pub fn meilleur_coup_iterative(
 ) -> Option<Move> {
     let mut best_move = None;
     let mut tt = TranspositionTable::new();
+    let keys = ZobristKeys::new();
+
     let mut heuristics = SearchHeuristics::default();
+
     let limits = SearchLimits {
         start: Instant::now(),
         max_time: Duration::from_millis(2000),
@@ -211,7 +215,7 @@ pub fn meilleur_coup_iterative(
         if limits.should_stop() {
             break;
         }
-        let mv = meilleur_coup(board, tables, depth, &mut tt, &limits,best_move,&mut heuristics);
+        let mv = meilleur_coup(board, tables, depth, &mut tt,&keys, &limits,best_move,&mut heuristics);
 
         if !limits.should_stop() && mv.is_some() {
             best_move = mv;
@@ -242,6 +246,7 @@ pub fn evaluation_negamax_alpha_beta(
     beta: i32,
     stats: &mut SearchStats,
     tt: &mut TranspositionTable,
+    keys : &ZobristKeys,
     limits: &SearchLimits,
     ply : usize,
     heuristics : &mut SearchHeuristics
@@ -251,7 +256,7 @@ pub fn evaluation_negamax_alpha_beta(
         return evaluation_negamax(board);
     }
     let original_alpha = alpha;
-    let key = cle_position(board);
+    let key = zobrist_hash(board,keys);
     let mut meilleure = -INF;
     let mut meilleur_mv = None;
 
@@ -297,6 +302,7 @@ pub fn evaluation_negamax_alpha_beta(
             -alpha,
             stats,
             tt,
+            keys,
             limits,
             ply +1,
             heuristics,
@@ -369,6 +375,7 @@ pub fn meilleur_coup(
     tables: &AttackTables,
     depth: u32,
     tt: &mut TranspositionTable,
+    keys : &ZobristKeys,
     limits: &SearchLimits,
     previous_best : Option<Move>,
     heuristics : &mut SearchHeuristics,
@@ -378,7 +385,7 @@ pub fn meilleur_coup(
 
     let mut coups = generate_legal_move(board, tables);
 
-    let key = cle_position(board);
+    let key = zobrist_hash(board,keys);
     let tt_best = tt.get(&key).and_then(|entry| entry.best_move);
     coups.sort_by_key(|mv| Reverse(score_root_move(mv,previous_best, tt_best)));
     let mut meilleur_mv = None;
@@ -402,6 +409,7 @@ pub fn meilleur_coup(
             -alpha,
             &mut stats,
             tt,
+            keys,
             limits,
             1,
             heuristics,

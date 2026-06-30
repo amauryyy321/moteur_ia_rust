@@ -14,3 +14,4 @@ pub mod perft;
 pub mod position_key;
 pub mod pseudo_legal_move;
 pub mod web_server;
+pub mod zobrist;

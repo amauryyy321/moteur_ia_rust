@@ -1,7 +1,7 @@
 use crate::board::{CBoard, Color};
 use std::collections::HashMap;
 use crate::chess_move::Move;
-pub type TranspositionTable = HashMap <ClePosition, TTEntry>;
+pub type TranspositionTable = HashMap <u64, TTEntry>;
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
