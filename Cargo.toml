@@ -16,11 +16,3 @@ opt-level = 3
 lto = "thin"
 codegen-units = 1
 debug = false
-
-[build]
-rustflags = ["-Awarnings"]
-
-[alias]
-rr = "run --release"
-br = "build --release"
-cr = "check"

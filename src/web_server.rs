@@ -15,7 +15,7 @@ use crate::notation::coord_to_square_index;
 use crate::partie::Partie;
 
 const INITIAL_FEN: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-const AI_DEPTH: u32 = 9;
+const AI_DEPTH: u32 = 15;
 
 #[derive(Clone)]
 pub struct AppState {

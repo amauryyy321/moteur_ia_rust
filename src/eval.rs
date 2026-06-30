@@ -201,7 +201,7 @@ pub fn meilleur_coup_iterative(
     max_depth: u32,
 ) -> Option<Move> {
     let mut best_move = None;
-    let mut tt = TranspositionTable::new();
+    let mut tt = TranspositionTable::new(64);
     let keys = ZobristKeys::new();
 
     let mut heuristics = SearchHeuristics::default();
@@ -260,7 +260,7 @@ pub fn evaluation_negamax_alpha_beta(
     let mut meilleure = -INF;
     let mut meilleur_mv = None;
 
-    if let Some(entry) = tt.get(&key) {
+    if let Some(entry) = tt.get(key) {
         if entry.depth >= depth {
             match entry.flag {
                 TTFlag::Exact => return entry.score,
@@ -282,7 +282,7 @@ pub fn evaluation_negamax_alpha_beta(
     }
 
     let mut moves = generate_legal_move(board, tables);
-    let tt_best = tt.get(&key).and_then(|entry| entry.best_move);
+    let tt_best = tt.get(key).and_then(|entry| entry.best_move);
     moves.sort_by_key(|mv| Reverse(score_search_move(mv,tt_best,heuristics,ply)));
 
     if moves.is_empty() {
@@ -332,8 +332,8 @@ pub fn evaluation_negamax_alpha_beta(
         TTFlag::Exact
     };
     tt.insert(
-        key,
         TTEntry {
+            key,
             depth,
             score: meilleure,
             flag,
@@ -386,7 +386,7 @@ pub fn meilleur_coup(
     let mut coups = generate_legal_move(board, tables);
 
     let key = zobrist_hash(board,keys);
-    let tt_best = tt.get(&key).and_then(|entry| entry.best_move);
+    let tt_best = tt.get(key).and_then(|entry| entry.best_move);
     coups.sort_by_key(|mv| Reverse(score_root_move(mv,previous_best, tt_best)));
     let mut meilleur_mv = None;
     let mut meilleur_score = -INF;
