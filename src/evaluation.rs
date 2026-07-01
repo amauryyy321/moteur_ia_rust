@@ -9,7 +9,6 @@ const PAWN_MG: [i32; 64] = [
     40, 40, 40, 40, 40, 40, 40, 40,
     0, 0, 0, 0, 0, 0, 0, 0,
 ];
-
 const PAWN_EG: [i32; 64] = [
     0, 0, 0, 0, 0, 0, 0, 0,
     5, 5, 5, 10, 10, 5, 5, 5,
@@ -20,7 +19,6 @@ const PAWN_EG: [i32; 64] = [
     100, 100, 100, 100, 100, 100, 100, 100,
     0, 0, 0, 0, 0, 0, 0, 0,
 ];
-
 const KNIGHT_MG: [i32; 64] = [
     -50, -40, -30, -30, -30, -30, -40, -50,
     -40, -20, 0, 5, 5, 0, -20, -40,
@@ -31,7 +29,6 @@ const KNIGHT_MG: [i32; 64] = [
     -40, -20, 0, 10, 10, 0, -20, -40,
     -50, -40, -30, -30, -30, -30, -40, -50,
 ];
-
 const KNIGHT_EG: [i32; 64] = [
     -40, -30, -20, -20, -20, -20, -30, -40,
     -30, -10, 0, 0, 0, 0, -10, -30,
@@ -232,6 +229,7 @@ pub fn evaluation_blanc(board: &CBoard) -> i32 {
     };
 
     score.add(evaluation_tables_de_cases(board));
+    score.add(evaluation_structure_pions(board));
     score.add(EvalScore{
         mg: evaluation_paire_de_fous(board),
         eg: evaluation_paire_de_fous(board),
@@ -286,4 +284,166 @@ fn evaluation_roque(board: &CBoard) -> i32 {
     score
 }
 
+/* evaluation des structures de pions */
 
+const DOUBLED_PAWN_PENALTY: i32 = 12;
+const ISOLATED_PAWN_PENALTY: i32 = 15;
+const BACKWARD_PAWN_PENALTY: i32 = 16;
+const PASSED_PAWN_PENALTY: [i32;8] = [0,8,15,30,55,90,140,0];
+
+fn file_mask(file: u8) -> u64 {
+    0x0101_0101_0101_0101u64 << file
+}
+
+fn adjacent_files_mask(file : u8) -> u64{
+    let mut mask = 0u64;
+    if file > 0 {
+        mask |= file_mask(file - 1);
+    }
+    if file < 7 { 
+        mask |= file_mask(file + 1);
+    }
+    mask
+}
+
+
+fn passed_pawn_mask(square: u8, color: Color) -> u64 {
+    let file = square % 8;
+    let rank = square / 8;
+    let files = file_mask(file) | adjacent_files_mask(file);
+
+    let foward_ranks = match(color){
+        Color::Blanc => {
+            if rank == 7 {
+                0
+            }else {
+                !0u64 << ((rank + 1)*8)
+            }
+        }
+        Color::Noir => {
+            if rank == 0 {
+                0
+            }else {
+                (1u64 << (rank*8))-1
+            }
+        }
+    
+        
+    };
+    files & foward_ranks
+}
+
+fn rank_from_color(square : u8, color: Color) -> usize {
+    let rank = square / 8;
+    match color {
+        Color::Blanc => rank as usize,
+        Color::Noir => (7-rank) as usize ,
+    }
+}
+
+fn square_from_file_rank(file : i32,rank : i32) -> Option<u8> {
+    if (0..8).contains(&file) && (0..8).contains(&rank) {
+        Some((rank * 8 + file) as u8)
+    }else {
+        None
+    }
+}
+
+fn pawn_attacks_square(enemy_pawn: u64, target: u8, enemy_color : Color) -> bool{
+    let file = (target % 8) as i32;
+    let rank = ( target / 8) as i32;
+
+    let attackers = match enemy_color {
+        Color::Blanc => [(file-1,rank-1),(file+1,rank-1)],
+        Color::Noir => [(file-1,rank+1),(file+1,rank+1)],
+    };
+
+    attackers.into_iter().filter_map(|(f,r)| square_from_file_rank(f,r)).any(|sq| enemy_pawn & (1u64 << sq) != 0)
+}
+
+fn has_friendly_pawn_behind_on_adjacent_file(friendly_pawns: u64, square: u8, color : Color)-> bool {
+    let file = (square % 8) as i32;
+    let rank = (square / 8) as i32;
+
+    for df in [-1,1] {
+        let f = file + df;
+        for r in 0..8 {
+            let behind = match color {
+                Color::Blanc => r <= rank,
+                Color::Noir => r >= rank,
+            };
+            if behind {
+                if let Some(sq) = square_from_file_rank(f,r){
+                    if friendly_pawns& (1u64 << sq ) != 0 {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+
+fn evaluation_structure_pions_couleur(board: &CBoard, color: Color) -> i32{
+    let (friendly_piece,enemy_piece) = match color {
+        Color::Blanc => (Pieces::PionBlanc,Pieces::PionNoir),
+        Color::Noir => (Pieces::PionNoir,Pieces::PionBlanc),
+    };
+
+    let friendly_pawns = board.piece_bb[friendly_piece as usize];
+    let enemy_pawns = board.piece_bb[enemy_piece as usize];
+
+    let mut score = 0;
+
+    for file in 0..8{
+        let count = (friendly_pawns & file_mask(file)).count_ones() as i32;
+        if count > 1 {
+            score -= (count - 1) * DOUBLED_PAWN_PENALTY;
+        }
+    }
+
+    let mut pawns = friendly_pawns;
+
+    while let Some(square) = pop_lsb(&mut pawns) {
+        let file = square % 8;
+
+        if friendly_pawns & adjacent_files_mask(file) == 0 {
+            score -= ISOLATED_PAWN_PENALTY;
+        }
+
+        if enemy_pawns & passed_pawn_mask(square, color) == 0{
+            score += PASSED_PAWN_PENALTY[rank_from_color(square,color) as usize];
+        }
+
+        let front_square = match color {
+            Color::Blanc  if square <= 55 => Some(square + 8),
+            Color::Noir  if square >= 8 => Some(square - 8),
+            _ => None,
+        };
+
+        if let Some(front) = front_square {
+            let enemy_color = match color {
+                Color::Blanc => Color::Noir,
+                Color::Noir => Color::Blanc,
+            };
+
+            if !has_friendly_pawn_behind_on_adjacent_file(friendly_pawns,square,color) && pawn_attacks_square(enemy_pawns, front , enemy_color){
+                score -= BACKWARD_PAWN_PENALTY;
+            }
+        }
+    }
+    score
+}
+
+fn evaluation_structure_pions(board: &CBoard) -> EvalScore {
+    let white = evaluation_structure_pions_couleur(board, Color::Blanc);
+    let black = evaluation_structure_pions_couleur(board, Color::Noir);
+
+    let score = white - black ;
+
+    EvalScore{
+        mg : score ,
+        eg : score
+    }
+}
